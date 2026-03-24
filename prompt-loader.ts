@@ -42,8 +42,10 @@ export interface PromptWithModel {
 	restore: boolean;
 	skill?: string;
 	thinking?: ThinkingLevel;
+	thinkingLevels?: ThinkingLevel[];
+	rotate?: boolean;
 	fresh?: boolean;
-	loop?: number;
+	loop?: number | null;
 	converge?: boolean;
 	subagent?: true | string;
 	inheritContext?: boolean;
@@ -243,13 +245,42 @@ function normalizeFresh(
 	return false;
 }
 
+function normalizeRotate(
+	value: unknown,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): boolean {
+	if (value === undefined) return false;
+	if (typeof value === "boolean") return value;
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		if (normalized === "true") return true;
+		if (normalized === "false") return false;
+	}
+
+	diagnostics.push(
+		createDiagnostic(
+			"invalid-rotate",
+			filePath,
+			source,
+			`Using default rotate=false for ${filePath}: frontmatter field "rotate" must be true or false.`,
+		),
+	);
+	return false;
+}
+
 function normalizeLoop(
 	value: unknown,
 	filePath: string,
 	source: PromptSource,
 	diagnostics: PromptLoaderDiagnostic[],
-): number | undefined {
+): number | null | undefined {
 	if (value === undefined) return undefined;
+
+	if (value === true || (typeof value === "string" && value.trim().toLowerCase() === "unlimited")) {
+		return null;
+	}
 
 	let normalizedValue: number | undefined;
 	if (typeof value === "number") {
@@ -267,7 +298,7 @@ function normalizeLoop(
 			"invalid-loop",
 			filePath,
 			source,
-			`Ignoring invalid loop value in ${filePath}: frontmatter field "loop" must be an integer between 1 and 999.`,
+			`Ignoring invalid loop value in ${filePath}: frontmatter field "loop" must be an integer between 1 and 999, true, or "unlimited".`,
 		),
 	);
 	return undefined;
@@ -481,6 +512,48 @@ function normalizeThinking(
 	return undefined;
 }
 
+function normalizeThinkingLevels(
+	value: unknown,
+	modelCount: number,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): ThinkingLevel[] | undefined {
+	if (typeof value !== "string") return undefined;
+
+	const levels = value
+		.split(",")
+		.map((item) => item.trim())
+		.filter(Boolean);
+
+	const invalidLevel = levels.find((level) => !(VALID_THINKING_LEVELS as readonly string[]).includes(level.toLowerCase()));
+	if (invalidLevel) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-thinking-levels",
+				filePath,
+				source,
+				`Ignoring invalid thinking level in ${filePath}: ${JSON.stringify(invalidLevel)}.`,
+			),
+		);
+		return undefined;
+	}
+
+	if (levels.length !== modelCount) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-thinking-level-count",
+				filePath,
+				source,
+				`Ignoring comma-separated thinking levels in ${filePath}: expected ${modelCount} entries to match frontmatter field "model".`,
+			),
+		);
+		return undefined;
+	}
+
+	return levels.map((level) => level.toLowerCase() as ThinkingLevel);
+}
+
 function loadPromptsWithModelFromDir(
 	dir: string,
 	source: PromptSource,
@@ -619,6 +692,7 @@ function loadPromptsWithModelFromDir(
 				const parsedModels = chain ? [] : normalizeModelSpecs(frontmatter.model, fullPath, source, diagnostics);
 				if (!chain && hasModelField && !parsedModels) continue;
 				const models = chain ? [] : (parsedModels ?? []);
+				const rotate = chain ? false : normalizeRotate(frontmatter.rotate, fullPath, source, diagnostics);
 
 				const name = entry.name.slice(0, -3);
 				if (RESERVED_COMMAND_NAMES.has(name)) {
@@ -637,7 +711,15 @@ function loadPromptsWithModelFromDir(
 				const safeCwd = (chain || subagent !== undefined) ? cwd : undefined;
 				const description = normalizeStringField("description", frontmatter.description, fullPath, source, diagnostics) ?? "";
 				const skill = chain ? undefined : normalizeStringField("skill", frontmatter.skill, fullPath, source, diagnostics);
-				const thinking = chain ? undefined : normalizeThinking(frontmatter.thinking, fullPath, source, diagnostics);
+				let thinking: ThinkingLevel | undefined;
+				let thinkingLevels: ThinkingLevel[] | undefined;
+				if (!chain) {
+					if (rotate && typeof frontmatter.thinking === "string" && frontmatter.thinking.includes(",")) {
+						thinkingLevels = normalizeThinkingLevels(frontmatter.thinking, models.length, fullPath, source, diagnostics);
+					} else {
+						thinking = normalizeThinking(frontmatter.thinking, fullPath, source, diagnostics);
+					}
+				}
 				const restore = normalizeRestore(frontmatter.restore, fullPath, source, diagnostics);
 				const fresh = normalizeFresh(frontmatter.fresh, fullPath, source, diagnostics);
 				const loop = normalizeLoop(frontmatter.loop, fullPath, source, diagnostics);
@@ -666,8 +748,10 @@ function loadPromptsWithModelFromDir(
 					restore,
 					skill,
 					thinking,
+					thinkingLevels,
+					rotate: rotate || undefined,
 					fresh: fresh || undefined,
-					loop: loop || undefined,
+					loop: loop !== undefined ? loop : undefined,
 					converge: converge === false ? false : undefined,
 					subagent,
 					inheritContext: safeInheritContext || undefined,
@@ -753,13 +837,15 @@ export function buildPromptCommandDescription(prompt: PromptWithModel): string {
 		return prompt.description ? `${prompt.description} ${details}` : details;
 	}
 	const modelLabel = prompt.models.length > 0 ? prompt.models.map((model) => model.split("/").pop() || model).join("|") : "current";
+	const rotateLabel = prompt.rotate ? " rotate" : "";
 	const skillLabel = prompt.skill ? ` +${prompt.skill}` : "";
-	const thinkingLabel = prompt.thinking ? ` ${prompt.thinking}` : "";
-	const loopLabel = prompt.loop ? ` loop:${prompt.loop}` : "";
+	const thinkingValue = prompt.thinkingLevels ? prompt.thinkingLevels.join(",") : prompt.thinking;
+	const thinkingLabel = thinkingValue ? ` ${thinkingValue}` : "";
+	const loopLabel = prompt.loop !== undefined ? ` loop:${prompt.loop === null ? "unlimited" : prompt.loop}` : "";
 	const subagentLabel = prompt.subagent ? ` subagent:${prompt.subagent === true ? "delegate" : prompt.subagent}` : "";
 	const cwdLabel = prompt.cwd ? ` cwd:${prompt.cwd}` : "";
 	const inheritContextLabel = prompt.inheritContext ? " fork" : "";
-	const details = `[${modelLabel}${thinkingLabel}${skillLabel}${loopLabel}${subagentLabel}${cwdLabel}${inheritContextLabel}] ${sourceLabel}`;
+	const details = `[${modelLabel}${rotateLabel}${thinkingLabel}${skillLabel}${loopLabel}${subagentLabel}${cwdLabel}${inheritContextLabel}] ${sourceLabel}`;
 	return prompt.description ? `${prompt.description} ${details}` : details;
 }
 

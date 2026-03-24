@@ -47,7 +47,7 @@ test("extractLoopCount treats bare --loop as unlimited", () => {
 	assert.deepEqual(extractLoopCount("--loop 5x"), { args: "5x", loopCount: null, fresh: false, converge: true });
 	assert.deepEqual(extractLoopCount("--loop -1"), { args: "-1", loopCount: null, fresh: false, converge: true });
 	assert.deepEqual(extractLoopCount("--loop --fresh"), { args: "", loopCount: null, fresh: true, converge: true });
-	assert.deepEqual(extractLoopCount("--loop --no-converge"), { args: "", loopCount: null, fresh: false, converge: true });
+	assert.deepEqual(extractLoopCount("--loop --no-converge"), { args: "", loopCount: null, fresh: false, converge: false });
 });
 
 test("extractLoopCount keeps quoted --loop as literal", () => {

@@ -235,6 +235,82 @@ test("loadPromptsWithModel parses fresh frontmatter field", () => {
 	});
 });
 
+test("loadPromptsWithModel parses rotate frontmatter field on non-chain templates", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "rotate.md"), "---\nmodel: claude-sonnet-4-20250514\nrotate: true\n---\nbody");
+
+		const result = loadPromptsWithModel(cwd);
+		assert.equal(result.prompts.get("rotate")?.rotate, true);
+	});
+});
+
+test("loadPromptsWithModel ignores rotate on chain templates without diagnostics", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "chain-rotate.md"), '---\nchain: "analyze -> fix"\nrotate: true\n---\nignored');
+
+		const result = loadPromptsWithModel(cwd);
+		const prompt = result.prompts.get("chain-rotate");
+		assert.ok(prompt);
+		assert.equal(prompt.rotate, undefined);
+		assert.doesNotMatch(result.diagnostics.map((item) => item.message).join("\n"), /invalid rotate/i);
+	});
+});
+
+test("loadPromptsWithModel stores comma-separated thinking levels when rotate model count matches", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "rotate-thinking.md"),
+			"---\nmodel: claude-sonnet-4-20250514, claude-opus-4-5, claude-haiku-4-5\nrotate: true\nthinking: high, xhigh, off\n---\nbody",
+		);
+
+		const result = loadPromptsWithModel(cwd);
+		const prompt = result.prompts.get("rotate-thinking");
+		assert.ok(prompt);
+		assert.deepEqual(prompt.thinkingLevels, ["high", "xhigh", "off"]);
+		assert.equal(prompt.thinking, undefined);
+	});
+});
+
+test("loadPromptsWithModel diagnoses mismatched comma-separated thinking levels for rotate prompts", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "rotate-thinking-mismatch.md"),
+			"---\nmodel: claude-sonnet-4-20250514, claude-opus-4-5\nrotate: true\nthinking: high, xhigh, off\n---\nbody",
+		);
+
+		const result = loadPromptsWithModel(cwd);
+		const prompt = result.prompts.get("rotate-thinking-mismatch");
+		assert.ok(prompt);
+		assert.equal(prompt.thinkingLevels, undefined);
+		assert.match(result.diagnostics.map((item) => item.message).join("\n"), /expected 2 entries to match frontmatter field "model"/i);
+	});
+});
+
+test("loadPromptsWithModel diagnoses invalid comma-separated thinking levels for rotate prompts", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "rotate-thinking-invalid.md"),
+			"---\nmodel: claude-sonnet-4-20250514, claude-opus-4-5\nrotate: true\nthinking: high, turbo\n---\nbody",
+		);
+
+		const result = loadPromptsWithModel(cwd);
+		const prompt = result.prompts.get("rotate-thinking-invalid");
+		assert.ok(prompt);
+		assert.equal(prompt.thinkingLevels, undefined);
+		assert.match(result.diagnostics.map((item) => item.message).join("\n"), /invalid thinking level/i);
+	});
+});
+
 test("loadPromptsWithModel parses numeric loop frontmatter field", () => {
 	withTempHome((root) => {
 		const cwd = join(root, "project");
@@ -266,6 +342,41 @@ test("loadPromptsWithModel diagnoses and ignores invalid loop frontmatter values
 		const result = loadPromptsWithModel(cwd);
 		assert.equal(result.prompts.get("bad-loop")?.loop, undefined);
 		assert.match(result.diagnostics.map((item) => item.message).join("\n"), /invalid loop value/i);
+	});
+});
+
+test("loadPromptsWithModel parses loop: unlimited as null", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "unlimited.md"), "---\nmodel: claude-sonnet-4-20250514\nloop: unlimited\n---\nbody");
+
+		const result = loadPromptsWithModel(cwd);
+		assert.equal(result.prompts.get("unlimited")?.loop, null);
+	});
+});
+
+test("loadPromptsWithModel parses loop: true as null (unlimited)", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "unlimited.md"), "---\nmodel: claude-sonnet-4-20250514\nloop: true\n---\nbody");
+
+		const result = loadPromptsWithModel(cwd);
+		assert.equal(result.prompts.get("unlimited")?.loop, null);
+	});
+});
+
+test("buildPromptCommandDescription shows loop:unlimited for unlimited loop", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "unlimited.md"), '---\nmodel: claude-sonnet-4-20250514\nloop: unlimited\ndescription: "test"\n---\nbody');
+
+		const result = loadPromptsWithModel(cwd);
+		const prompt = result.prompts.get("unlimited");
+		assert.ok(prompt);
+		assert.match(buildPromptCommandDescription(prompt), /loop:unlimited/);
 	});
 });
 
@@ -446,6 +557,22 @@ test("buildPromptCommandDescription includes loop metadata", () => {
 		const prompt = result.prompts.get("deslop");
 		assert.ok(prompt);
 		assert.equal(buildPromptCommandDescription(prompt), "Deslop [claude-sonnet-4-20250514 +tmux loop:5] (project)");
+	});
+});
+
+test("buildPromptCommandDescription includes rotate and comma-separated thinking levels", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "rotate-description.md"),
+			"---\nmodel: claude-sonnet-4-20250514, claude-opus-4-5\nrotate: true\nthinking: high, xhigh\n---\nbody",
+		);
+
+		const result = loadPromptsWithModel(cwd);
+		const prompt = result.prompts.get("rotate-description");
+		assert.ok(prompt);
+		assert.equal(buildPromptCommandDescription(prompt), "[claude-sonnet-4-20250514|claude-opus-4-5 rotate high,xhigh] (project)");
 	});
 });
 

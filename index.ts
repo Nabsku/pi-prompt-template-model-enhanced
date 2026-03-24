@@ -16,6 +16,7 @@ import { renderDelegatedSubagentResult } from "./subagent-renderer.js";
 interface LoopState {
 	currentIteration: number;
 	totalIterations: number | null;
+	rotationLabel?: string;
 }
 
 interface FreshCollapse {
@@ -58,7 +59,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 	let accumulatedSummaries: string[] = [];
 	let lastDiagnostics = "";
 	let storedCommandCtx: ExtensionCommandContext | null = null;
-	const UNLIMITED_LOOP_CAP = 50;
+	const UNLIMITED_LOOP_CAP = 999;
 
 	const toolManager = createToolManager(pi, {
 		isActive: () => !!(loopState || chainActive),
@@ -353,10 +354,11 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 	function updateLoopStatus(ctx: ExtensionContext) {
 		if (!ctx.hasUI) return;
 		if (loopState) {
+			const suffix = loopState.rotationLabel ? ` · ${loopState.rotationLabel}` : "";
 			const label =
 				loopState.totalIterations !== null
-					? `loop ${loopState.currentIteration}/${loopState.totalIterations}`
-					: `loop ${loopState.currentIteration}`;
+					? `loop ${loopState.currentIteration}/${loopState.totalIterations}${suffix}`
+					: `loop ${loopState.currentIteration}${suffix}`;
 			ctx.ui.setStatus("prompt-loop", ctx.ui.theme.fg("warning", label));
 		} else {
 			ctx.ui.setStatus("prompt-loop", undefined);
@@ -401,7 +403,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		const useFresh = freshFlag || initialPrompt.fresh === true;
 		const effectiveMax = totalIterations ?? UNLIMITED_LOOP_CAP;
 		const isUnlimited = totalIterations === null;
-		const useConverge = isUnlimited ? true : converge && initialPrompt.converge !== false;
+		const useConverge = converge && initialPrompt.converge !== false;
 		const anchorId = useFresh ? ctx.sessionManager.getLeafId() : null;
 
 		loopState = { currentIteration: 1, totalIterations };
@@ -414,9 +416,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		try {
 			for (let i = 0; i < effectiveMax; i++) {
 				loopState.currentIteration = i + 1;
-				updateLoopStatus(ctx);
 				const iterationLabel = totalIterations !== null ? `${i + 1}/${totalIterations}` : `${i + 1}`;
-				notify(ctx, `Loop ${iterationLabel}: ${name}`, "info");
 
 				refreshPrompts(ctx.cwd, ctx);
 				const prompt = prompts.get(name);
@@ -425,10 +425,29 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 					break;
 				}
 				const effectivePrompt = cwdOverride ? { ...prompt, cwd: cwdOverride } : prompt;
+				let iterationPrompt = effectivePrompt;
+				loopState!.rotationLabel = undefined;
+				if (effectivePrompt.rotate && effectivePrompt.models.length > 1) {
+					const rotationIndex = i % effectivePrompt.models.length;
+					const rotatedThinking = effectivePrompt.thinkingLevels
+						? effectivePrompt.thinkingLevels[rotationIndex]
+						: effectivePrompt.thinking;
+					iterationPrompt = {
+						...effectivePrompt,
+						models: [effectivePrompt.models[rotationIndex]],
+						thinking: rotatedThinking,
+					};
+					const shortModel = effectivePrompt.models[rotationIndex].split("/").pop() || effectivePrompt.models[rotationIndex];
+					const thinkingLabel = rotatedThinking ? ` ${rotatedThinking}` : "";
+					loopState!.rotationLabel = `${shortModel}${thinkingLabel}`;
+				}
+				updateLoopStatus(ctx);
+				const rotationSuffix = loopState!.rotationLabel ? ` [${loopState!.rotationLabel}]` : "";
+				notify(ctx, `Loop ${iterationLabel}: ${name}${rotationSuffix}`, "info");
 
 				const iterationStartId = ctx.sessionManager.getLeafId();
 				const stepResult = await executePromptStep(
-					effectivePrompt,
+					iterationPrompt,
 					parseCommandArgs(cleanedArgs),
 					ctx,
 					currentModel,
@@ -440,7 +459,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 				currentThinking = pi.getThinkingLevel();
 				completedIterations++;
 
-				const iterationChanged = shouldDelegatePrompt(effectivePrompt, subagentOverride)
+				const iterationChanged = shouldDelegatePrompt(iterationPrompt, subagentOverride)
 					? stepResult.changed
 					: didIterationMakeChanges(getIterationEntries(ctx, iterationStartId));
 				if (useConverge && (isUnlimited || effectiveMax > 1) && !iterationChanged) {
@@ -567,7 +586,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		pendingSkillMessage = undefined;
 		const effectiveMax = totalIterations ?? UNLIMITED_LOOP_CAP;
 		const isUnlimited = totalIterations === null;
-		const useConverge = isUnlimited ? true : converge;
+		const useConverge = converge;
 
 		const anchorId = fresh ? ctx.sessionManager.getLeafId() : null;
 		const chainStepNames = steps
@@ -820,7 +839,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 			const extracted = extractChainContextFlag(argsWithoutSubagent);
 			const chainContextEnabled = extracted.chainContext || prompt.chainContext === "summary";
 			const loop = extractLoopCount(extracted.args);
-			let totalIterations: number | null = prompt.loop ?? 1;
+			let totalIterations: number | null = prompt.loop !== undefined ? prompt.loop : 1;
 			let fresh = false;
 			let converge = true;
 			let cleanedArgs = extracted.args;

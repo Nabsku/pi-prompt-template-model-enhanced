@@ -47,6 +47,7 @@ class FakePi {
 	skillCommands: Array<{ name: string; source: "skill"; sourceInfo: { path: string } }> = [];
 	userMessages: string[] = [];
 	setModelCalls: string[] = [];
+	thinkingCalls: string[] = [];
 	currentModel = ACTIVE_MODEL;
 	private thinking = "medium";
 
@@ -98,6 +99,7 @@ class FakePi {
 
 	setThinkingLevel(level: string) {
 		this.thinking = level;
+		this.thinkingCalls.push(level);
 	}
 
 	sendUserMessage(content: string) {
@@ -324,11 +326,11 @@ async function withSubagentRuntime(root: string, run: () => Promise<void>) {
 	}
 }
 
-test("bare --loop forces convergence on and ignores --no-converge", async () => {
+test("bare --loop with --no-converge respects no-converge and converges only on default", async () => {
 	await withTempHome(async (root) => {
 		const cwd = join(root, "project");
 		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
-		writeFileSync(join(cwd, ".pi", "prompts", "deslop.md"), `---\nmodel: ${MODEL_ID}\nconverge: false\n---\nARGS:$@`);
+		writeFileSync(join(cwd, ".pi", "prompts", "deslop.md"), `---\nmodel: ${MODEL_ID}\n---\nARGS:$@`);
 
 		const pi = new FakePi();
 		promptModelExtension(pi as never);
@@ -337,7 +339,8 @@ test("bare --loop forces convergence on and ignores --no-converge", async () => 
 
 		const deslop = pi.commands.get("deslop");
 		assert.ok(deslop);
-		await deslop.handler("task --loop --no-converge", ctx);
+		// bare --loop without --no-converge: converges on first no-change iteration
+		await deslop.handler("task --loop", ctx);
 
 		assert.deepEqual(pi.userMessages, ["ARGS:task"]);
 		assert.match(getNotifications().join("\n"), /Loop converged at 1 \(no changes\)/);
@@ -361,6 +364,201 @@ test("bounded --loop N runs requested iterations when no-converge is set", async
 
 		assert.deepEqual(pi.userMessages, ["ARGS:task", "ARGS:task", "ARGS:task"]);
 		assert.match(getNotifications().join("\n"), /Loop finished: 3\/3 iterations/);
+	});
+});
+
+test("loop rotation cycles models across iterations", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "rotate-models.md"),
+			"---\nmodel: anthropic/rotate-one, anthropic/rotate-two, anthropic/rotate-three\nloop: 6\nconverge: false\nrotate: true\nrestore: false\n---\nROTATE",
+		);
+
+		const baseModel = { provider: "anthropic", id: "base-model" };
+		const rotateOne = { provider: "anthropic", id: "rotate-one" };
+		const rotateTwo = { provider: "anthropic", id: "rotate-two" };
+		const rotateThree = { provider: "anthropic", id: "rotate-three" };
+		const models = [baseModel, rotateOne, rotateTwo, rotateThree];
+
+		const pi = new FakePi();
+		pi.currentModel = baseModel;
+		promptModelExtension(pi as never);
+		const { ctx } = createContext(cwd, pi, models);
+		await pi.emit("session_start", {}, ctx);
+
+		const rotateModels = pi.commands.get("rotate-models");
+		assert.ok(rotateModels);
+		await rotateModels.handler("", ctx);
+
+		assert.deepEqual(pi.setModelCalls, [
+			"anthropic/rotate-one",
+			"anthropic/rotate-two",
+			"anthropic/rotate-three",
+			"anthropic/rotate-one",
+			"anthropic/rotate-two",
+			"anthropic/rotate-three",
+		]);
+	});
+});
+
+test("loop rotation cycles comma-separated thinking levels across iterations", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "rotate-thinking.md"),
+			"---\nmodel: anthropic/rotate-one, anthropic/rotate-two, anthropic/rotate-three\nthinking: high, xhigh, off\nloop: 6\nconverge: false\nrotate: true\nrestore: false\n---\nROTATE",
+		);
+
+		const baseModel = { provider: "anthropic", id: "base-model" };
+		const rotateOne = { provider: "anthropic", id: "rotate-one" };
+		const rotateTwo = { provider: "anthropic", id: "rotate-two" };
+		const rotateThree = { provider: "anthropic", id: "rotate-three" };
+		const models = [baseModel, rotateOne, rotateTwo, rotateThree];
+
+		const pi = new FakePi();
+		pi.currentModel = baseModel;
+		promptModelExtension(pi as never);
+		const { ctx } = createContext(cwd, pi, models);
+		await pi.emit("session_start", {}, ctx);
+
+		const rotateThinking = pi.commands.get("rotate-thinking");
+		assert.ok(rotateThinking);
+		await rotateThinking.handler("", ctx);
+
+		assert.deepEqual(pi.thinkingCalls, ["high", "xhigh", "off", "high", "xhigh", "off"]);
+	});
+});
+
+test("loop rotation still converges early when an iteration makes no changes", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "rotate-converge.md"),
+			"---\nmodel: anthropic/rotate-one, anthropic/rotate-two, anthropic/rotate-three\nloop: 6\nrotate: true\nrestore: false\n---\nROTATE",
+		);
+
+		const baseModel = { provider: "anthropic", id: "base-model" };
+		const rotateOne = { provider: "anthropic", id: "rotate-one" };
+		const rotateTwo = { provider: "anthropic", id: "rotate-two" };
+		const rotateThree = { provider: "anthropic", id: "rotate-three" };
+		const models = [baseModel, rotateOne, rotateTwo, rotateThree];
+		const changedBranchEntries = () =>
+			pi.userMessages.length <= 1
+				? [
+					{ id: "root", type: "message", message: { role: "user", content: [{ type: "text", text: "start" }] } },
+					{
+						id: "write-1",
+						type: "message",
+						message: {
+							role: "assistant",
+							content: [{ type: "toolCall", name: "write", arguments: { path: "src/file.ts" } }],
+						},
+					},
+				]
+				: [{ id: "root", type: "message", message: { role: "user", content: [{ type: "text", text: "start" }] } }];
+
+		const pi = new FakePi();
+		pi.currentModel = baseModel;
+		promptModelExtension(pi as never);
+		const { ctx, getNotifications } = createContext(cwd, pi, models, { branchEntries: changedBranchEntries });
+		await pi.emit("session_start", {}, ctx);
+
+		const rotateConverge = pi.commands.get("rotate-converge");
+		assert.ok(rotateConverge);
+		await rotateConverge.handler("", ctx);
+
+		assert.equal(pi.userMessages.length, 2);
+		assert.match(getNotifications().join("\n"), /Loop converged at 2\/6 \(no changes\)/);
+	});
+});
+
+test("loop rotation is a no-op for single-model prompts", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "rotate-single.md"),
+			"---\nmodel: anthropic/rotate-one\nloop: 3\nconverge: false\nrotate: true\nrestore: false\n---\nROTATE",
+		);
+
+		const baseModel = { provider: "anthropic", id: "base-model" };
+		const rotateOne = { provider: "anthropic", id: "rotate-one" };
+		const models = [baseModel, rotateOne];
+
+		const pi = new FakePi();
+		pi.currentModel = baseModel;
+		promptModelExtension(pi as never);
+		const { ctx } = createContext(cwd, pi, models);
+		await pi.emit("session_start", {}, ctx);
+
+		const rotateSingle = pi.commands.get("rotate-single");
+		assert.ok(rotateSingle);
+		await rotateSingle.handler("", ctx);
+
+		assert.deepEqual(pi.setModelCalls, ["anthropic/rotate-one"]);
+		assert.equal(pi.userMessages.length, 3);
+	});
+});
+
+test("loop notifications include the rotation label", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "rotate-notify.md"),
+			"---\nmodel: anthropic/rotate-one, anthropic/rotate-two\nthinking: high, xhigh\nloop: 2\nconverge: false\nrotate: true\nrestore: false\n---\nROTATE",
+		);
+
+		const baseModel = { provider: "anthropic", id: "base-model" };
+		const rotateOne = { provider: "anthropic", id: "rotate-one" };
+		const rotateTwo = { provider: "anthropic", id: "rotate-two" };
+		const models = [baseModel, rotateOne, rotateTwo];
+
+		const pi = new FakePi();
+		pi.currentModel = baseModel;
+		promptModelExtension(pi as never);
+		const { ctx, getNotifications } = createContext(cwd, pi, models);
+		await pi.emit("session_start", {}, ctx);
+
+		const rotateNotify = pi.commands.get("rotate-notify");
+		assert.ok(rotateNotify);
+		await rotateNotify.handler("", ctx);
+
+		const notifications = getNotifications().join("\n");
+		assert.match(notifications, /Loop 1\/2: rotate-notify \[rotate-one high\]/);
+		assert.match(notifications, /Loop 2\/2: rotate-notify \[rotate-two xhigh\]/);
+	});
+});
+
+test("loop prompts without rotation keep fallback model semantics", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "fallback-loop.md"),
+			"---\nmodel: anthropic/fallback-one, anthropic/fallback-two\nloop: 2\nconverge: false\nrestore: false\n---\nFALLBACK",
+		);
+
+		const baseModel = { provider: "anthropic", id: "base-model" };
+		const fallbackOne = { provider: "anthropic", id: "fallback-one" };
+		const fallbackTwo = { provider: "anthropic", id: "fallback-two" };
+		const models = [baseModel, fallbackOne, fallbackTwo];
+
+		const pi = new FakePi();
+		pi.currentModel = baseModel;
+		promptModelExtension(pi as never);
+		const { ctx } = createContext(cwd, pi, models);
+		await pi.emit("session_start", {}, ctx);
+
+		const fallbackLoop = pi.commands.get("fallback-loop");
+		assert.ok(fallbackLoop);
+		await fallbackLoop.handler("", ctx);
+
+		assert.deepEqual(pi.setModelCalls, ["anthropic/fallback-one"]);
 	});
 });
 
@@ -391,8 +589,8 @@ test("bare --loop stops at unlimited cap when each iteration makes changes", asy
 		assert.ok(deslop);
 		await deslop.handler("task --loop", ctx);
 
-		assert.equal(pi.userMessages.length, 50);
-		assert.match(getNotifications().join("\n"), /Loop finished: 50 iterations \(cap reached\)/);
+		assert.equal(pi.userMessages.length, 999);
+		assert.match(getNotifications().join("\n"), /Loop finished: 999 iterations \(cap reached\)/);
 	});
 });
 
@@ -416,11 +614,104 @@ test("frontmatter loop executes without --loop and strips loop flags", async () 
 	});
 });
 
-test("chain templates support bare --loop as unlimited with forced convergence", async () => {
+test("frontmatter loop: unlimited runs until convergence by default", async () => {
 	await withTempHome(async (root) => {
 		const cwd = join(root, "project");
 		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
-		writeFileSync(join(cwd, ".pi", "prompts", "pipeline.md"), "---\nchain: worker\nconverge: false\n---\nignored");
+		writeFileSync(join(cwd, ".pi", "prompts", "deslop.md"), `---\nmodel: ${MODEL_ID}\nloop: unlimited\n---\nARGS:$@`);
+
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const { ctx, getNotifications } = createContext(cwd, pi);
+		await pi.emit("session_start", {}, ctx);
+
+		const deslop = pi.commands.get("deslop");
+		assert.ok(deslop);
+		await deslop.handler("task", ctx);
+
+		assert.deepEqual(pi.userMessages, ["ARGS:task"]);
+		assert.match(getNotifications().join("\n"), /Loop converged at 1 \(no changes\)/);
+	});
+});
+
+test("frontmatter loop: true is equivalent to loop: unlimited", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "deslop.md"), `---\nmodel: ${MODEL_ID}\nloop: true\n---\nARGS:$@`);
+
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const { ctx, getNotifications } = createContext(cwd, pi);
+		await pi.emit("session_start", {}, ctx);
+
+		const deslop = pi.commands.get("deslop");
+		assert.ok(deslop);
+		await deslop.handler("task", ctx);
+
+		assert.deepEqual(pi.userMessages, ["ARGS:task"]);
+		assert.match(getNotifications().join("\n"), /Loop converged at 1 \(no changes\)/);
+	});
+});
+
+test("frontmatter loop: unlimited with converge: false runs to cap", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "deslop.md"), `---\nmodel: ${MODEL_ID}\nloop: unlimited\nconverge: false\n---\nARGS:$@`);
+
+		const changedBranchEntries = () => [
+			{ id: "root", type: "message", message: { role: "user", content: [{ type: "text", text: "start" }] } },
+			{
+				id: "write-1",
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", name: "write", arguments: { path: "src/file.ts" } }],
+				},
+			},
+		];
+
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const { ctx, getNotifications } = createContext(cwd, pi, [ACTIVE_MODEL], { branchEntries: changedBranchEntries });
+		await pi.emit("session_start", {}, ctx);
+
+		const deslop = pi.commands.get("deslop");
+		assert.ok(deslop);
+		await deslop.handler("task", ctx);
+
+		assert.equal(pi.userMessages.length, 999);
+		assert.match(getNotifications().join("\n"), /Loop finished: 999 iterations \(cap reached\)/);
+	});
+});
+
+test("frontmatter loop: unlimited shows iteration count without total in status", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "deslop.md"), `---\nmodel: ${MODEL_ID}\nloop: unlimited\nconverge: false\n---\nARGS:$@`);
+
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const { ctx, getNotifications } = createContext(cwd, pi);
+		await pi.emit("session_start", {}, ctx);
+
+		const deslop = pi.commands.get("deslop");
+		assert.ok(deslop);
+		await deslop.handler("task", ctx);
+
+		const notifications = getNotifications().join("\n");
+		assert.match(notifications, /Loop 1: deslop/);
+		assert.doesNotMatch(notifications, /Loop 1\/\d+/);
+	});
+});
+
+test("chain templates support bare --loop as unlimited with convergence", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "pipeline.md"), "---\nchain: worker\n---\nignored");
 		writeFileSync(join(cwd, ".pi", "prompts", "worker.md"), `---\nmodel: ${MODEL_ID}\n---\nWORK:$@`);
 
 		const pi = new FakePi();
@@ -430,7 +721,7 @@ test("chain templates support bare --loop as unlimited with forced convergence",
 
 		const pipeline = pi.commands.get("pipeline");
 		assert.ok(pipeline);
-		await pipeline.handler("task --loop --no-converge", ctx);
+		await pipeline.handler("task --loop", ctx);
 
 		assert.deepEqual(pi.userMessages, ["WORK:task"]);
 		assert.match(getNotifications().join("\n"), /Loop converged at 1 \(no changes\)/);
@@ -461,7 +752,7 @@ test("queued run-prompt applies bare --loop semantics", async () => {
 	await withTempHome(async (root) => {
 		const cwd = join(root, "project");
 		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
-		writeFileSync(join(cwd, ".pi", "prompts", "deslop.md"), `---\nmodel: ${MODEL_ID}\nconverge: false\n---\nARGS:$@`);
+		writeFileSync(join(cwd, ".pi", "prompts", "deslop.md"), `---\nmodel: ${MODEL_ID}\n---\nARGS:$@`);
 
 		const pi = new FakePi();
 		promptModelExtension(pi as never);
@@ -474,7 +765,7 @@ test("queued run-prompt applies bare --loop semantics", async () => {
 
 		const runPromptTool = pi.tools.get("run-prompt");
 		assert.ok(runPromptTool);
-		await runPromptTool.execute("tool-call-loop", { command: "deslop task --loop --no-converge" });
+		await runPromptTool.execute("tool-call-loop", { command: "deslop task --loop" });
 
 		await pi.emit("agent_end", {}, ctx);
 		assert.deepEqual(pi.userMessages, ["ARGS:task"]);

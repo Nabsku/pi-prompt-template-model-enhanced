@@ -113,7 +113,7 @@ export function extractLoopCount(argsString: string): LoopExtraction | null {
 		cleaned = cleaned.slice(0, start) + cleaned.slice(end);
 	}
 
-	const converge = loopCount === null ? true : !noConverge;
+	const converge = !noConverge;
 	return { args: cleaned.trim(), loopCount, fresh, converge };
 }
 

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- Added `loop: unlimited` (and `loop: true`) frontmatter for open-ended loops that run until convergence, user interrupt, or the 999-iteration safety cap.
+- Added model rotation for loop iterations via `rotate: true` frontmatter. Cycles through comma-separated models and thinking levels each iteration instead of using fallback semantics.
+
+### Changed
+- Unlimited loops (`--loop` bare or `loop: unlimited`) no longer force convergence on. Convergence follows the `converge` field like bounded loops. Safety cap raised from 50 to 999.
+
 ## [0.6.5] - 2026-03-24
 
 ### Added

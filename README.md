@@ -69,7 +69,8 @@ All fields are optional. Templates that don't use any extension features (no `mo
 | Field | Default | What it does |
 |-------|---------|--------------|
 | `restore` | `true` | After the command finishes, switch back to whatever model and thinking level were active before. Set `false` to stay on the new model. |
-| `loop` | — | Run this template multiple times by default (1–999). CLI `--loop` overrides this. See [Loop Execution](#loop-execution). |
+| `loop` | — | Run this template multiple times by default (1–999, `true`, or `unlimited`). CLI `--loop` overrides this. See [Loop Execution](#loop-execution). |
+| `rotate` | `false` | When `true` and looping, cycle through models in the `model` list instead of using fallback semantics. Thinking levels can also be comma-separated to pair with each model. |
 | `fresh` | `false` | When looping, collapse the conversation between iterations to a brief summary instead of carrying the full context forward. Saves tokens on long loops. |
 | `converge` | `true` | When looping, stop early if an iteration makes no file changes. Set `false` to always run every iteration. |
 
@@ -248,7 +249,7 @@ Run a template multiple times with `--loop`:
 ```
 /deslop --loop 5
 /deslop --loop=5
-/deslop --loop          # unlimited — runs until convergence (50-iteration cap)
+/deslop --loop          # unlimited — runs until convergence or cap (999)
 ```
 
 You can also set a default in frontmatter. CLI `--loop` always overrides:
@@ -259,17 +260,82 @@ loop: 5
 ---
 ```
 
+Use `loop: unlimited` (or `loop: true`) for open-ended loops that run until convergence, user interrupt, or the safety cap of 999 iterations:
+
+```markdown
+---
+loop: unlimited
+converge: false
+fresh: true
+subagent: true
+---
+```
+
 ### How looping works
 
 Each iteration runs the same prompt. By default, context accumulates — iteration 3 sees the full conversation from iterations 1 and 2 and builds on that work.
 
-**Convergence**: If an iteration makes no file changes (no `write` or `edit` tool calls), the loop stops early. This is on by default. Use `--no-converge` or `converge: false` to always run every iteration. Bare `--loop` (unlimited) always forces convergence on, since its whole purpose is "run until nothing changes."
+**Convergence**: If an iteration makes no file changes (no `write` or `edit` tool calls), the loop stops early. This is on by default. Use `--no-converge` or `converge: false` to always run every iteration.
 
 **Fresh context**: Add `--fresh` (or `fresh: true` in frontmatter) to collapse the conversation between iterations. Each iteration gets a clean slate with only brief summaries of what previous iterations did. Good for long loops where accumulated context would blow up the token count.
 
 **Status**: The TUI status bar shows `loop 2/5` during execution.
 
 Model, thinking level, and skill are maintained throughout. If `restore: true` (the default), everything is restored after the final iteration.
+
+## Model Rotation
+
+`rotate: true` turns a comma-separated `model` list from a fallback chain into a cycling list. Each loop iteration uses the next model in the list, wrapping around:
+
+```markdown
+---
+model: claude-opus-4-6, gpt-5.4, gpt-5.3-codex
+thinking: high, xhigh, off
+loop: 9
+rotate: true
+fresh: true
+---
+Review and fix issues in this codebase.
+```
+
+Iteration 1 runs Opus + `high`, iteration 2 runs GPT-5.4 + `xhigh`, iteration 3 runs Codex + `off`, then wraps back to Opus. The status bar shows which model is active: `loop 2/9 · gpt-5.4 xhigh`.
+
+This is especially useful for [ralph-style loops](https://ghuntley.com/ralph/) where different models catch different things. The `subagent` examples below require [pi-subagents](https://github.com/nicobailon/pi-subagents/). A single-model ralph loop that delegates with fresh context each iteration:
+
+```markdown
+---
+model: claude-sonnet-4-20250514
+subagent: true
+inheritContext: true
+loop: 5
+fresh: true
+---
+Simplify this code: $@
+```
+
+Add `rotate` and multiple models to cycle different perspectives on each pass:
+
+```markdown
+---
+model: claude-opus-4-6, gpt-5.4, gpt-5.3-codex
+thinking: xhigh, high, high
+loop: 9
+rotate: true
+fresh: true
+subagent: true
+---
+Review and fix issues in this codebase.
+```
+
+Each iteration gets fresh context, a different model, and its own thinking level. Convergence stops the loop when an iteration makes no file changes — use `converge: false` to guarantee every model gets at least one shot.
+
+`thinking` pairing with `rotate: true`:
+
+- Single value (`thinking: high`) — applied to every model.
+- Comma-separated (`thinking: high, xhigh, off`) — positional, must match the number of models.
+- Omitted — each iteration inherits the session default.
+
+Without `loop`, `rotate` has no effect and comma-separated `model` keeps normal fallback behavior.
 
 ## Chaining Templates
 
