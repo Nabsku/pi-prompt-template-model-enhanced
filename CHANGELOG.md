@@ -1,10 +1,18 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.6] - 2026-03-28
 
 ### Added
+- Added `--model=provider/model-id` runtime flag to override a template's model for a single invocation. Works with single execution, loops, and delegation.
+- Added `--fork` runtime flag to enable `inheritContext` (forked context) at invocation time. Implies `--subagent` if not already set.
+- Inline loop iterations now include a `[Loop 2/5]` prefix so the agent knows it's in a loop and which iteration it's on. Delegated (subagent) loops are unaffected.
 - Added `loop: unlimited` (and `loop: true`) frontmatter for open-ended loops that run until convergence, user interrupt, or the 999-iteration safety cap.
 - Added model rotation for loop iterations via `rotate: true` frontmatter. Cycles through comma-separated models and thinking levels each iteration instead of using fallback semantics.
+
+### Fixed
+- Pressing Escape during a loop or chain iteration now stops the loop. Previously, aborted inline turns were treated as "no changes" and the loop continued.
+- Delegation errors during loop iterations no longer abort the entire loop. The error is reported and the loop continues to the next iteration (useful with model rotation where one model may fail but others succeed).
+- Per-step bare `--loop` in chain declarations (e.g., `double-check --loop -> deslop`) now correctly runs unlimited iterations instead of running once.
 
 ### Changed
 - Unlimited loops (`--loop` bare or `loop: unlimited`) no longer force convergence on. Convergence follows the `converge` field like bounded loops. Safety cap raised from 50 to 999.

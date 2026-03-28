@@ -242,6 +242,17 @@ During execution, a live progress widget appears above the editor showing elapse
 
 You can override delegation at runtime per invocation with `--subagent`, `--subagent=<name>`, `--subagent:<name>`, or `--cwd=<path>`. `--cwd=<path>` must be absolute after optional `~/...` expansion. Runtime flags take precedence for that invocation only.
 
+Two additional runtime flags work for any prompt (not just delegated ones):
+
+- `--model=provider/model-id` — override the template's `model` for this invocation. Works with single execution, loops, and delegation.
+- `--fork` — run with `inheritContext` (forked context). Implies `--subagent` if not already set.
+
+```
+/double-check --model=anthropic/claude-opus-4-6
+/double-check --fork --subagent:worker
+/deslop --model=openai/gpt-5.4 --loop 3
+```
+
 ## Loop Execution
 
 Run a template multiple times with `--loop`:

@@ -3,7 +3,7 @@ import { parseCommandArgs } from "./args.js";
 export interface ChainStep {
 	name: string;
 	args: string[];
-	loopCount?: number;
+	loopCount?: number | null;
 	withContext?: boolean;
 }
 
@@ -81,11 +81,11 @@ function scanSegmentTokens(segment: string): SegmentToken[] {
 	return tokens;
 }
 
-function extractStepFlags(segment: string): { cleanedSegment: string; loopCount?: number; withContext: boolean } {
+function extractStepFlags(segment: string): { cleanedSegment: string; loopCount?: number | null; withContext: boolean } {
 	const tokens = scanSegmentTokens(segment);
 	const loopTokenRanges: Array<{ start: number; end: number }> = [];
 	const withContextTokenRanges: Array<{ start: number; end: number }> = [];
-	let loopCount: number | undefined;
+	let loopCount: number | null | undefined;
 	let withContext = false;
 
 	for (let i = 1; i < tokens.length; i++) {
@@ -109,17 +109,24 @@ function extractStepFlags(segment: string): { cleanedSegment: string; loopCount?
 			continue;
 		}
 
-		if (token.value === "--loop" && i + 1 < tokens.length) {
-			const next = tokens[i + 1];
-			if (!next.quoted && /^\d+$/.test(next.value)) {
-				loopTokenRanges.push({ start: token.start, end: token.end }, { start: next.start, end: next.end });
-				const parsed = parseInt(next.value, 10);
-				if (parsed >= 1 && parsed <= 999 && loopCount === undefined) {
-					loopCount = parsed;
+		if (token.value === "--loop") {
+			loopTokenRanges.push({ start: token.start, end: token.end });
+			if (i + 1 < tokens.length) {
+				const next = tokens[i + 1];
+				if (!next.quoted && /^\d+$/.test(next.value)) {
+					loopTokenRanges.push({ start: next.start, end: next.end });
+					const parsed = parseInt(next.value, 10);
+					if (parsed >= 1 && parsed <= 999 && loopCount === undefined) {
+						loopCount = parsed;
+					}
+					i++;
+					continue;
 				}
-				i++;
-				continue;
 			}
+			if (loopCount === undefined) {
+				loopCount = null;
+			}
+			continue;
 		}
 	}
 

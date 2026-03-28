@@ -153,3 +153,11 @@ export function getIterationEntries(ctx: Pick<ExtensionContext, "sessionManager"
 	if (startIdx < 0) return branch;
 	return branch.slice(startIdx + 1);
 }
+
+export function wasIterationAborted(entries: SessionEntry[]): boolean {
+	for (const entry of entries) {
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		if ((entry.message as AssistantMessage).stopReason === "aborted") return true;
+	}
+	return false;
+}

@@ -109,6 +109,10 @@ class FakePi {
 	sendMessage() {}
 }
 
+function stripLoopPrefix(msg: string): string {
+	return msg.replace(/^\[.*?\]\n\n/, "");
+}
+
 async function withTempHome(run: (root: string) => Promise<void>) {
 	const root = mkdtempSync(join(tmpdir(), "pi-prompt-template-model-"));
 	const previousHome = process.env.HOME;
@@ -342,7 +346,7 @@ test("bare --loop with --no-converge respects no-converge and converges only on 
 		// bare --loop without --no-converge: converges on first no-change iteration
 		await deslop.handler("task --loop", ctx);
 
-		assert.deepEqual(pi.userMessages, ["ARGS:task"]);
+		assert.deepEqual(pi.userMessages.map(stripLoopPrefix), ["ARGS:task"]);
 		assert.match(getNotifications().join("\n"), /Loop converged at 1 \(no changes\)/);
 	});
 });
@@ -362,7 +366,10 @@ test("bounded --loop N runs requested iterations when no-converge is set", async
 		assert.ok(deslop);
 		await deslop.handler("task --loop 3 --no-converge", ctx);
 
-		assert.deepEqual(pi.userMessages, ["ARGS:task", "ARGS:task", "ARGS:task"]);
+		assert.deepEqual(pi.userMessages.map(stripLoopPrefix), ["ARGS:task", "ARGS:task", "ARGS:task"]);
+		assert.ok(pi.userMessages[0].startsWith("[Loop 1/3]"));
+		assert.ok(pi.userMessages[1].startsWith("[Loop 2/3]"));
+		assert.ok(pi.userMessages[2].startsWith("[Loop 3/3]"));
 		assert.match(getNotifications().join("\n"), /Loop finished: 3\/3 iterations/);
 	});
 });
@@ -609,7 +616,7 @@ test("frontmatter loop executes without --loop and strips loop flags", async () 
 		assert.ok(deslop);
 		await deslop.handler("task --fresh --no-converge", ctx);
 
-		assert.deepEqual(pi.userMessages, ["ARGS:task", "ARGS:task", "ARGS:task"]);
+		assert.deepEqual(pi.userMessages.map(stripLoopPrefix), ["ARGS:task", "ARGS:task", "ARGS:task"]);
 		assert.equal(getNavigateCount(), 2);
 	});
 });
@@ -629,7 +636,7 @@ test("frontmatter loop: unlimited runs until convergence by default", async () =
 		assert.ok(deslop);
 		await deslop.handler("task", ctx);
 
-		assert.deepEqual(pi.userMessages, ["ARGS:task"]);
+		assert.deepEqual(pi.userMessages.map(stripLoopPrefix), ["ARGS:task"]);
 		assert.match(getNotifications().join("\n"), /Loop converged at 1 \(no changes\)/);
 	});
 });
@@ -649,7 +656,7 @@ test("frontmatter loop: true is equivalent to loop: unlimited", async () => {
 		assert.ok(deslop);
 		await deslop.handler("task", ctx);
 
-		assert.deepEqual(pi.userMessages, ["ARGS:task"]);
+		assert.deepEqual(pi.userMessages.map(stripLoopPrefix), ["ARGS:task"]);
 		assert.match(getNotifications().join("\n"), /Loop converged at 1 \(no changes\)/);
 	});
 });
@@ -743,7 +750,7 @@ test("CLI --loop overrides frontmatter loop and strips repeated loop flags", asy
 		assert.ok(deslop);
 		await deslop.handler("task --loop 2 --fresh --fresh --no-converge --no-converge", ctx);
 
-		assert.deepEqual(pi.userMessages, ["ARGS:task", "ARGS:task"]);
+		assert.deepEqual(pi.userMessages.map(stripLoopPrefix), ["ARGS:task", "ARGS:task"]);
 		assert.equal(getNavigateCount(), 1);
 	});
 });
@@ -768,7 +775,7 @@ test("queued run-prompt applies bare --loop semantics", async () => {
 		await runPromptTool.execute("tool-call-loop", { command: "deslop task --loop" });
 
 		await pi.emit("agent_end", {}, ctx);
-		assert.deepEqual(pi.userMessages, ["ARGS:task"]);
+		assert.deepEqual(pi.userMessages.map(stripLoopPrefix), ["ARGS:task"]);
 		assert.match(getNotifications().join("\n"), /Loop converged at 1 \(no changes\)/);
 	});
 });
@@ -851,7 +858,7 @@ test("chain templates honor per-step --loop counts", async () => {
 		assert.ok(pipeline);
 		await pipeline.handler("", ctx);
 
-		assert.deepEqual(pi.userMessages, ["first", "first", "second", "second", "second"]);
+		assert.deepEqual(pi.userMessages.map(stripLoopPrefix), ["first", "first", "second", "second", "second"]);
 	});
 });
 
@@ -912,7 +919,7 @@ test("per-step convergence stops on first no-change iteration when step converge
 		assert.ok(pipeline);
 		await pipeline.handler("", ctx);
 
-		assert.deepEqual(pi.userMessages, ["worker"]);
+		assert.deepEqual(pi.userMessages.map(stripLoopPrefix), ["worker"]);
 	});
 });
 
@@ -1858,5 +1865,71 @@ test("parallel(scan-fe --with-context) is rejected by chain validation", async (
 
 		await pi.commands.get("pipeline")!.handler("", ctx);
 		assert.match(getNotifications().join("\n"), /Step "scan-fe" in parallel\(\) does not support per-task --with-context\./);
+	});
+});
+
+test("--model flag overrides prompt model for single execution", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "review.md"), `---\nmodel: ${MODEL_ID}\n---\nreview code`);
+
+		const overrideModel = { provider: "anthropic", id: "claude-opus-4-6" };
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const { ctx } = createContext(cwd, pi, [ACTIVE_MODEL, overrideModel]);
+		await pi.emit("session_start", {}, ctx);
+
+		const command = pi.commands.get("review");
+		assert.ok(command);
+		await command.handler("--model=anthropic/claude-opus-4-6", ctx);
+
+		assert.deepEqual(pi.setModelCalls, ["anthropic/claude-opus-4-6"]);
+		assert.deepEqual(pi.userMessages, ["review code"]);
+	});
+});
+
+test("--model flag overrides prompt model in loop iterations", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(
+			join(cwd, ".pi", "prompts", "fix.md"),
+			`---\nmodel: ${MODEL_ID}\nloop: 2\nconverge: false\n---\nfix bugs`,
+		);
+
+		const overrideModel = { provider: "openai", id: "gpt-5.4" };
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const { ctx } = createContext(cwd, pi, [ACTIVE_MODEL, overrideModel]);
+		await pi.emit("session_start", {}, ctx);
+
+		const command = pi.commands.get("fix");
+		assert.ok(command);
+		await command.handler("--model=openai/gpt-5.4", ctx);
+
+		assert.equal(pi.setModelCalls[0], "openai/gpt-5.4");
+		assert.equal(pi.userMessages.length, 2);
+	});
+});
+
+test("--fork flag implies --subagent and sets inheritContext", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "check.md"), `---\nmodel: ${MODEL_ID}\n---\ncheck code`);
+
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const { ctx, getNotifications } = createContext(cwd, pi);
+		await pi.emit("session_start", {}, ctx);
+
+		const command = pi.commands.get("check");
+		assert.ok(command);
+		await command.handler("--fork", ctx);
+
+		assert.equal(pi.userMessages.length, 0, "should not execute inline (delegation path taken)");
+		const notifications = getNotifications().join("\n");
+		assert.ok(notifications.length > 0, "should have attempted delegation");
 	});
 });

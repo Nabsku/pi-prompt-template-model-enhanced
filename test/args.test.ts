@@ -247,3 +247,43 @@ test("extractSubagentOverride handles quoted, empty, and repeated --cwd flags", 
 		cwd: "/tmp/two",
 	});
 });
+
+test("extractSubagentOverride extracts --model and strips it from args", () => {
+	assert.deepEqual(extractSubagentOverride("--model=anthropic/claude-opus-4-6 task"), {
+		args: "task",
+		model: "anthropic/claude-opus-4-6",
+	});
+	assert.deepEqual(extractSubagentOverride("task --subagent --model=openai/gpt-5.4"), {
+		args: "task",
+		override: { enabled: true },
+		model: "openai/gpt-5.4",
+	});
+});
+
+test("extractSubagentOverride ignores empty --model= and quoted --model", () => {
+	assert.deepEqual(extractSubagentOverride("task --model="), {
+		args: "task",
+	});
+	assert.deepEqual(extractSubagentOverride('"--model=anthropic/opus" task'), {
+		args: '"--model=anthropic/opus" task',
+	});
+});
+
+test("extractSubagentOverride extracts --fork and implies --subagent", () => {
+	assert.deepEqual(extractSubagentOverride("task --fork"), {
+		args: "task",
+		override: { enabled: true },
+		fork: true,
+	});
+	assert.deepEqual(extractSubagentOverride("task --fork --subagent:worker"), {
+		args: "task",
+		override: { enabled: true, agent: "worker" },
+		fork: true,
+	});
+});
+
+test("extractSubagentOverride preserves quoted --fork", () => {
+	assert.deepEqual(extractSubagentOverride('"--fork" task'), {
+		args: '"--fork" task',
+	});
+});

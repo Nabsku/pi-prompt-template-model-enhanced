@@ -84,3 +84,18 @@ test("parseChainDeclaration supports --with-context with per-step --loop", () =>
 	assert.deepEqual(parsed.invalidSegments, []);
 	assert.deepEqual(parsed.steps, [{ name: "worker", args: [], loopCount: 2, withContext: true }]);
 });
+
+test("parseChainDeclaration treats bare --loop as unlimited per-step loop", () => {
+	const parsed = parseChainDeclaration("double-check --loop -> deslop");
+	assert.deepEqual(parsed.invalidSegments, []);
+	assert.deepEqual(parsed.steps, [
+		{ name: "double-check", args: [], loopCount: null },
+		{ name: "deslop", args: [], loopCount: undefined },
+	]);
+});
+
+test("parseChainDeclaration treats bare --loop with non-numeric next token as unlimited", () => {
+	const parsed = parseChainDeclaration("worker --loop --with-context");
+	assert.deepEqual(parsed.invalidSegments, []);
+	assert.deepEqual(parsed.steps, [{ name: "worker", args: [], loopCount: null, withContext: true }]);
+});

@@ -20,6 +20,8 @@ export interface SubagentOverrideExtraction {
 	args: string;
 	override?: SubagentOverride;
 	cwd?: string;
+	model?: string;
+	fork?: boolean;
 }
 
 export function extractLoopCount(argsString: string): LoopExtraction | null {
@@ -210,6 +212,8 @@ export function extractChainContextFlag(argsString: string): { args: string; cha
 export function extractSubagentOverride(argsString: string): SubagentOverrideExtraction {
 	let override: SubagentOverride | undefined;
 	let cwdRaw: string | undefined;
+	let modelRaw: string | undefined;
+	let fork = false;
 	const tokensToRemove: Array<{ start: number; end: number }> = [];
 
 	let i = 0;
@@ -250,6 +254,20 @@ export function extractSubagentOverride(argsString: string): SubagentOverrideExt
 			tokensToRemove.push({ start: tokenStart, end: i });
 			const value = token.slice("--cwd=".length);
 			cwdRaw = value || undefined;
+			continue;
+		}
+
+		if (token.startsWith("--model=")) {
+			tokensToRemove.push({ start: tokenStart, end: i });
+			const value = token.slice("--model=".length);
+			modelRaw = value || undefined;
+			continue;
+		}
+
+		if (token === "--fork") {
+			tokensToRemove.push({ start: tokenStart, end: i });
+			fork = true;
+			continue;
 		}
 	}
 
@@ -261,10 +279,14 @@ export function extractSubagentOverride(argsString: string): SubagentOverrideExt
 		cleaned = cleaned.slice(0, start) + cleaned.slice(end);
 	}
 
+	if (fork && !override) override = { enabled: true };
+
 	return {
 		args: cleaned.trim(),
 		...(override ? { override } : {}),
 		...(cwdRaw !== undefined ? { cwd: cwdRaw } : {}),
+		...(modelRaw !== undefined ? { model: modelRaw } : {}),
+		...(fork ? { fork: true } : {}),
 	};
 }
 
