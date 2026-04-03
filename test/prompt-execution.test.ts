@@ -13,9 +13,9 @@ const registry = {
 	getAvailable() {
 		return [model];
 	},
-	async getApiKey() {
-		return "token";
-	},
+		async getApiKeyAndHeaders() {
+			return { ok: true, apiKey: "token" };
+		},
 	isUsingOAuth() {
 		return false;
 	},
@@ -87,9 +87,9 @@ test("preparePromptExecution renders conditionals against resolved fallback mode
 		getAvailable() {
 			return [sonnet]; // Only sonnet is available
 		},
-		async getApiKey() {
-			return undefined;
-		},
+			async getApiKeyAndHeaders() {
+				return { ok: false, error: "missing auth" };
+			},
 		isUsingOAuth() {
 			return false;
 		},

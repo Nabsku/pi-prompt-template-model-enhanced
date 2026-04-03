@@ -1522,10 +1522,6 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		resetSessionScopedState(ctx);
 	});
 
-	pi.on("session_switch", async (_event, ctx) => {
-		resetSessionScopedState(ctx);
-	});
-
 	pi.on("model_select", async (event) => {
 		runtimeModel = event.model;
 	});

@@ -14,7 +14,12 @@ export interface RegistryLike {
 	getAvailable(): Model<any>[];
 	isUsingOAuth(model: Model<any>): boolean;
 	hasConfiguredAuth?: (model: Model<any>) => boolean;
-	getApiKey?: (model: Model<any>) => Promise<string | undefined>;
+	getApiKeyAndHeaders?: (model: Model<any>) => Promise<{
+		ok: boolean;
+		apiKey?: string;
+		headers?: Record<string, string>;
+		error?: string;
+	}>;
 }
 
 function isSameModel(a: Model<any>, b: Model<any>): boolean {
@@ -78,7 +83,10 @@ async function hasUsableAuth(model: Model<any>, registry: RegistryLike): Promise
 	if (availableMatch) return true;
 	if (!registry.isUsingOAuth(model)) return false;
 	if (registry.hasConfiguredAuth) return registry.hasConfiguredAuth(model);
-	if (registry.getApiKey) return Boolean(await registry.getApiKey(model));
+	if (registry.getApiKeyAndHeaders) {
+		const auth = await registry.getApiKeyAndHeaders(model);
+		return auth.ok;
+	}
 	return false;
 }
 

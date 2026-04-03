@@ -125,7 +125,7 @@ function createContext(cwd: string, pi: FakePi) {
 				},
 				getAll() { return [MODEL]; },
 				getAvailable() { return [MODEL]; },
-				async getApiKey() { return "token"; },
+					async getApiKeyAndHeaders() { return { ok: true, apiKey: "token" }; },
 				isUsingOAuth() { return false; },
 			},
 			ui: {

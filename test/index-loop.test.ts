@@ -143,9 +143,9 @@ function createContext(
 		getAvailable() {
 			return models;
 		},
-		async getApiKey() {
-			return "token";
-		},
+			async getApiKeyAndHeaders() {
+				return { ok: true, apiKey: "token" };
+			},
 		isUsingOAuth() {
 			return false;
 		},
@@ -221,9 +221,9 @@ function createBranchingContext(
 		getAvailable() {
 			return models;
 		},
-		async getApiKey() {
-			return "token";
-		},
+			async getApiKeyAndHeaders() {
+				return { ok: true, apiKey: "token" };
+			},
 		isUsingOAuth() {
 			return false;
 		},
@@ -1541,7 +1541,7 @@ test("session switch clears queued skill message", async () => {
 		const deslop = pi.commands.get("deslop");
 		assert.ok(deslop);
 		await deslop.handler("demo", ctx);
-		await pi.emit("session_switch", {}, ctx);
+			await pi.emit("session_start", { reason: "resume" }, ctx);
 		assert.equal(await pi.emitWithResult("before_agent_start", { systemPrompt: "BASE" }, ctx), undefined);
 	});
 });
@@ -1566,7 +1566,7 @@ test("session switch clears pending restore state", async () => {
 		assert.ok(deslop);
 		await deslop.handler("demo", ctx);
 		assert.deepEqual(pi.setModelCalls, ["anthropic/target-model"]);
-		await pi.emit("session_switch", {}, ctx);
+			await pi.emit("session_start", { reason: "resume" }, ctx);
 		await pi.emit("agent_end", {}, ctx);
 		assert.deepEqual(pi.setModelCalls, ["anthropic/target-model"]);
 	});

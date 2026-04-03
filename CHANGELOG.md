@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.7.1] - 2026-04-03
+
+### Changed
+- Bumped `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`, `@mariozechner/pi-coding-agent`, and `@mariozechner/pi-tui` to `^0.65.0` and updated the extension for the pi `0.65.0` session/runtime breaking changes (`session_start` migration and `getApiKeyAndHeaders()` auth lookup).
+
+### Fixed
+- Added regression coverage for the shipped `best-of-n` example and re-verified the installed prompt still matches the shipped example used for manual installs.
+
 ## [0.7.0] - 2026-04-01
 
 ### Added

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPromptCommandDescription, loadPromptsWithModel, RESERVED_COMMAND_NAMES, resolveSkillPath } from "../prompt-loader.js";
@@ -874,6 +874,46 @@ test("loadPromptsWithModel validates parallel/worktree frontmatter combinations"
 			writeFileSync(join(cwd, ".pi", "prompts", `${testCase.name}.md`), testCase.content);
 			testCase.check(loadPromptsWithModel(cwd));
 		}
+	});
+});
+
+test("loadPromptsWithModel parses the shipped best-of-n example", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "best-of-n.md"), readFileSync(new URL("../examples/best-of-n.md", import.meta.url), "utf8"));
+
+		const result = loadPromptsWithModel(cwd);
+		const prompt = result.prompts.get("best-of-n");
+		assert.ok(prompt);
+		assert.equal(prompt.description, "Best-of-N code task with parallel workers using different models in separate worktrees, parallel reviewers, and a final apply step that picks or synthesizes the final patch.");
+		assert.equal(prompt.worktree, true);
+		assert.equal(prompt.workers?.length, 2);
+		assert.deepEqual(
+			prompt.workers?.map((slot) => ({ agent: slot.agent, model: slot.model, count: slot.count, taskSuffix: slot.taskSuffix })),
+			[
+				{ agent: "delegate", model: "openai-codex/gpt-5.3-codex-spark:low", count: 3, taskSuffix: undefined },
+				{ agent: "delegate", model: "openai-codex/gpt-5.4-mini:high", count: 2, taskSuffix: undefined },
+			],
+		);
+		assert.equal(prompt.reviewers?.length, 2);
+		assert.deepEqual(
+			prompt.reviewers?.map((slot) => ({ agent: slot.agent, model: slot.model, count: slot.count, taskSuffix: slot.taskSuffix })),
+			[
+				{ agent: "reviewer", model: "openai-codex/gpt-5.3-codex-spark:medium", count: 2, taskSuffix: undefined },
+				{ agent: "reviewer", model: "openai-codex/gpt-5.4-mini:high", count: undefined, taskSuffix: "Focus extra attention on regression risk and missing edge cases." },
+			],
+		);
+		assert.deepEqual(prompt.finalApplier, {
+			agent: "delegate",
+			model: "openai-codex/gpt-5.4-mini:xhigh",
+			taskSuffix: "Apply the final patch directly on the current branch, run best-effort relevant verification, and report changed files plus verification run.",
+		});
+		assert.equal(prompt.content, "$@");
+		assert.match(buildPromptCommandDescription(prompt), /workers:5/);
+		assert.match(buildPromptCommandDescription(prompt), /reviewers:3/);
+		assert.match(buildPromptCommandDescription(prompt), /final-applier/);
+		assert.equal(result.diagnostics.length, 0);
 	});
 });
 

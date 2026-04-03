@@ -72,9 +72,9 @@ function createCtx(cwd: string) {
 			getAvailable() {
 				return [model];
 			},
-			async getApiKey() {
-				return "token";
-			},
+				async getApiKeyAndHeaders() {
+					return { ok: true, apiKey: "token" };
+				},
 			isUsingOAuth() {
 				return false;
 			},

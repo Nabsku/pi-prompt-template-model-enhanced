@@ -18,11 +18,12 @@ function createRegistry(models: FakeModel[], available: FakeModel[] = []) {
 		getAvailable() {
 			return available;
 		},
-		async getApiKey(model: FakeModel) {
-			return available.some((candidate) => candidate.provider === model.provider && candidate.id === model.id)
-				? "token"
-				: undefined;
-		},
+			async getApiKeyAndHeaders(model: FakeModel) {
+				if (available.some((candidate) => candidate.provider === model.provider && candidate.id === model.id)) {
+					return { ok: true, apiKey: "token" };
+				}
+				return { ok: false, error: "missing auth" };
+			},
 		isUsingOAuth() {
 			return false;
 		},
@@ -90,9 +91,12 @@ test("selectModelCandidate can recover an ambiguous bare id through OAuth-style 
 		getAvailable() {
 			return [];
 		},
-		async getApiKey(model: FakeModel) {
-			return model.provider === "github-copilot" ? "oauth-token" : undefined;
-		},
+			async getApiKeyAndHeaders(model: FakeModel) {
+				if (model.provider === "github-copilot") {
+					return { ok: true, apiKey: "oauth-token" };
+				}
+				return { ok: false, error: "missing auth" };
+			},
 		isUsingOAuth(model: FakeModel) {
 			return model.provider === "github-copilot";
 		},
@@ -118,9 +122,12 @@ test("selectModelCandidate prefers a higher-priority OAuth-backed provider over 
 		getAvailable() {
 			return [models[0]];
 		},
-		async getApiKey(model: FakeModel) {
-			return model.provider === "github-copilot" ? "oauth-token" : undefined;
-		},
+			async getApiKeyAndHeaders(model: FakeModel) {
+				if (model.provider === "github-copilot") {
+					return { ok: true, apiKey: "oauth-token" };
+				}
+				return { ok: false, error: "missing auth" };
+			},
 		isUsingOAuth(model: FakeModel) {
 			return model.provider === "github-copilot";
 		},
