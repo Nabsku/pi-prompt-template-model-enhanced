@@ -34,6 +34,14 @@ import { createToolManager } from "./tool-manager.js";
 import { executeSubagentPromptStep, type DelegatedPromptParallelResult } from "./subagent-step.js";
 import { DEFAULT_SUBAGENT_NAME, PROMPT_TEMPLATE_SUBAGENT_MESSAGE_TYPE } from "./subagent-runtime.js";
 import { renderDelegatedSubagentResult } from "./subagent-renderer.js";
+import {
+	PROMPT_TEMPLATE_DETERMINISTIC_COMPLETION_MESSAGE_TYPE,
+	PROMPT_TEMPLATE_DETERMINISTIC_MESSAGE_TYPE,
+	buildDeterministicPreamble,
+	runDeterministicStep,
+	shouldHandoffToLlm,
+} from "./deterministic-step.js";
+import { renderDeterministicCompletion, renderDeterministicResult } from "./deterministic-renderer.js";
 
 interface LoopState {
 	currentIteration: number;
@@ -125,6 +133,8 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 
 	pi.registerMessageRenderer<SkillLoadedDetails>("skill-loaded", renderSkillLoaded);
 	pi.registerMessageRenderer(PROMPT_TEMPLATE_SUBAGENT_MESSAGE_TYPE, renderDelegatedSubagentResult);
+	pi.registerMessageRenderer(PROMPT_TEMPLATE_DETERMINISTIC_MESSAGE_TYPE, renderDeterministicResult);
+	pi.registerMessageRenderer(PROMPT_TEMPLATE_DETERMINISTIC_COMPLETION_MESSAGE_TYPE, renderDeterministicCompletion);
 
 	function registerPromptCommand(name: string) {
 		pi.registerCommand(name, {
@@ -248,6 +258,40 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		taskPreamble?: string,
 		loopContext?: string,
 	): Promise<PromptStepResult | "aborted"> {
+		let deterministicPreamble: string | undefined;
+		if (prompt.deterministic) {
+			try {
+				const deterministicResult = await runDeterministicStep(prompt, prompt.deterministic, ctx.cwd);
+				const deterministicPreambleText = buildDeterministicPreamble(deterministicResult);
+				pi.sendMessage({
+					customType: PROMPT_TEMPLATE_DETERMINISTIC_MESSAGE_TYPE,
+					content: deterministicPreambleText,
+					display: true,
+					details: deterministicResult,
+				});
+				if (!shouldHandoffToLlm(prompt.deterministic, deterministicResult)) {
+					pi.sendMessage({
+						customType: PROMPT_TEMPLATE_DETERMINISTIC_COMPLETION_MESSAGE_TYPE,
+						content: `[Deterministic complete: ${prompt.name}]`,
+						display: true,
+						details: {
+							promptName: prompt.name,
+							exitCode: deterministicResult.exitCode,
+							timedOut: deterministicResult.timedOut,
+							status: deterministicResult.exitCode === 0 ? "succeeded" : "failed",
+						},
+					});
+					return { changed: false };
+				}
+				deterministicPreamble = deterministicPreambleText;
+			} catch (error) {
+				notify(ctx, `Deterministic step failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+				return "aborted";
+			}
+		}
+
+		const combinedTaskPreamble = [taskPreamble, deterministicPreamble].filter(Boolean).join("\n\n");
+
 		if (shouldDelegatePrompt(prompt, override)) {
 			try {
 				const delegated =
@@ -259,7 +303,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 							override,
 							signal: ctx.signal,
 							inheritedModel,
-							taskPreamble,
+							taskPreamble: combinedTaskPreamble || undefined,
 							parallel: Array.from({ length: prompt.parallel }, (_, index) => ({
 								prompt,
 								args,
@@ -276,7 +320,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 							override,
 							signal: ctx.signal,
 							inheritedModel,
-							taskPreamble,
+							taskPreamble: combinedTaskPreamble || undefined,
 						});
 				if (!delegated) {
 					notify(ctx, `Prompt \`${prompt.name}\` is not configured for delegated execution.`, "error");
@@ -327,7 +371,10 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		pendingSkillMessage = skillResolution.kind === "ready" ? skillResolution.message : undefined;
 
 		const startId = ctx.sessionManager.getLeafId();
-		const content = loopContext ? `[${loopContext}]\n\n${prepared.content}` : prepared.content;
+		const effectiveContent = combinedTaskPreamble
+			? `${combinedTaskPreamble}\n\n${prepared.content}`
+			: prepared.content;
+		const content = loopContext ? `[${loopContext}]\n\n${effectiveContent}` : effectiveContent;
 		pi.sendUserMessage(content);
 		await waitForTurnStart(ctx);
 		await ctx.waitForIdle();
@@ -1393,6 +1440,16 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 			return;
 		}
 		const argsWithoutSubagent = subagent.args;
+		if (prompt.deterministic) {
+			if (subagent.override || subagent.fork) {
+				notify(ctx, `Deterministic prompts do not support runtime --subagent/--fork in v1`, "error");
+				return;
+			}
+			if (extractLoopCount(argsWithoutSubagent)) {
+				notify(ctx, `Deterministic prompts do not support runtime --loop in v1`, "error");
+				return;
+			}
+		}
 
 		const hasCompareLineup = prompt.workers !== undefined || prompt.reviewers !== undefined || prompt.finalApplier !== undefined;
 		if (hasCompareLineup) {
@@ -1482,7 +1539,14 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		const effectivePrompt = { ...prompt, ...(runtimeCwd ? { cwd: runtimeCwd } : {}), ...promptOverrides };
+		const effectivePrompt = {
+			...prompt,
+			...(runtimeCwd ? {
+				cwd: runtimeCwd,
+				...(prompt.deterministic ? { deterministic: { ...prompt.deterministic, cwd: runtimeCwd } } : {}),
+			} : {}),
+			...promptOverrides,
+		};
 		const savedModel = getCurrentModel(ctx);
 		const savedThinking = pi.getThinkingLevel();
 		const stepResult = await executePromptStep(

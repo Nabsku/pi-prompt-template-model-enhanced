@@ -353,6 +353,128 @@ Within a compare lineup, use `task` for a full per-slot override and `taskSuffix
 
 When a compare prompt uses `bestOfN.worktree: true`, all worker slots must resolve to the same `cwd`. Mixed worker `cwd` values are only allowed when worktree isolation is off. Worktree isolation is for the worker phase only; `bestOfN.finalApplier` always applies on the real branch (`compareCwd`).
 
+## Deterministic Steps
+
+Prompt templates can run one deterministic command or script before any optional LLM turn. Use this when the first step should be direct code, not model latency.
+
+The flow is simple:
+
+1. Run one command or script.
+2. Always render a visible deterministic result card with the command, exit code, duration, and stdout/stderr previews.
+3. Optionally hand the structured result to the model as a `[Deterministic step]` preamble before the prompt body.
+4. If `handoff: never`, stop after the result card and a visible completion marker — no LLM turn happens.
+
+That handoff preamble is intentionally structured and uses stable field names like `status`, `executionKind`, `command`, `cwd`, `exitCode`, `signal`, `durationMs`, `timedOut`, `lineCount`, `charCount`, `truncated`, `omittedChars`, and `preview`.
+
+V1 scope is intentionally narrow: deterministic execution only works on single prompt templates. It does not combine with chain templates, delegated/subagent prompts, `parallel`, or loops. At runtime, deterministic prompts explicitly reject `--loop`, `--subagent`, and `--fork` in v1.
+
+### Authoring forms
+
+You can write deterministic steps as **top-level shorthand** or **nested under `deterministic:`**. Both are equivalent. Use shorthand for brevity, nested when you want everything grouped under one key.
+
+**Top-level shorthand** — put `run`, `script`, `handoff`, `timeout`, `cwd`, `env`, and `nonInteractive` directly in frontmatter:
+
+```markdown
+---
+run: git push origin HEAD:main
+handoff: on-failure
+timeout: 30000
+---
+If the push failed, explain why and suggest the next step.
+```
+
+You can also use `script:` as shorthand:
+
+```markdown
+---
+script: ./scripts/ship.sh
+handoff: always
+timeout: 15000
+---
+Summarize the script result.
+```
+
+**Nested form** — group everything under `deterministic:`:
+
+```markdown
+---
+model: claude-sonnet-4-20250514
+deterministic:
+  script:
+    path: ./scripts/ship.sh
+    args:
+      - --fast
+  handoff: always
+  timeout: 15000
+  cwd: ~/src/my-repo
+---
+Summarize the script result and call out anything risky.
+```
+
+**Structured command form** — when you need explicit args instead of a single shell string, use `deterministic.run.command` with `args`:
+
+```markdown
+---
+model: claude-sonnet-4-20250514
+deterministic:
+  run:
+    command: git
+    args: [status, --short]
+  handoff: always
+---
+Interpret the repo state.
+```
+
+Do not mix top-level shorthand with nested `deterministic:` in the same prompt. Pick one style.
+
+### Model requirement
+
+Deterministic prompts that hand off to the model (`handoff: always`, `on-success`, or `on-failure`) need a model to continue into. You can either:
+
+- Add a `model:` field explicitly
+- Omit `model:` and let the prompt inherit whatever model is currently active
+
+`handoff: never` prompts do not need a model field because they never reach the LLM.
+
+### Handoff values
+
+- `always` — always continue into the LLM after the deterministic card is emitted.
+- `never` — stop after the deterministic card and completion marker.
+- `on-success` — continue only when the command exits `0`.
+- `on-failure` — continue only when the command exits non-zero.
+
+Command descriptions in the slash-command picker show this feature as `deterministic-step:<handoff>`.
+
+### Timeout
+
+`timeout` is in milliseconds. When a timeout fires, the runner sends `SIGTERM` first. If the process still has not exited after a short grace window, it escalates to `SIGKILL`.
+
+### Script path resolution
+
+Relative script paths resolve from the prompt file's directory first, then fall back to the command invocation `cwd`. Absolute script paths also work.
+
+### Environment and non-interactive mode
+
+You can provide explicit environment variables and control the runner's non-interactive guardrails:
+
+```markdown
+---
+deterministic:
+  run: ./deploy.sh
+  handoff: never
+  nonInteractive: false
+  env:
+    SPECIAL_TOKEN: abc123
+    RETRIES: 2
+---
+```
+
+`nonInteractive` defaults to `true`. In that mode the runner keeps stdin ignored and adds a few guardrail environment defaults such as `CI=1`, `GIT_TERMINAL_PROMPT=0`, `PAGER=cat`, and `GIT_PAGER=cat`. Set `nonInteractive: false` when the command needs a more normal process environment and you explicitly want to opt out of those defaults. Explicit `env` values override the built-in defaults.
+
+### Output capping
+
+Large stdout/stderr streams are capped before they are stored in the conversation card payload. The card and the LLM handoff block both show the total character and line counts plus explicit truncation metadata when output was capped.
+
 ## Loop Execution
 
 Run a template multiple times with `--loop`:
@@ -672,3 +794,4 @@ $@
 - In chains, model-less steps inherit the chain-start model snapshot, not the previous step's model. This is intentional for deterministic behavior.
 - Delegated `subagent` prompts require [pi-subagents](https://github.com/nicobailon/pi-subagents/).
 - `run-prompt` must be explicitly enabled with `/prompt-tool on`.
+rompt-tool on`.

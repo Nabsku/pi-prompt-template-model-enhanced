@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-21
+
+### Added
+- Added first-class deterministic prompt-template execution for single prompt templates via `deterministic:` or shorthand `run` / `script` frontmatter. Templates can run one direct command or script before any optional LLM turn.
+- Added configurable deterministic-step handoff policies: `always`, `never`, `on-success`, and `on-failure`.
+- Added deterministic result cards that always show the executed command or script, resolved `cwd`, exit code, duration, and stdout/stderr previews.
+- Added deterministic-step `env` support plus `nonInteractive` control for deploy/release-style scripts that need explicit environment variables or want to disable the default non-interactive guardrail env bundle.
+- Added a visible deterministic completion message for `handoff: never`, so no-handoff runs still end with an explicit completion marker after the result card.
+
+### Changed
+- When a deterministic prompt hands off to the model, the extension now prepends a generated `[Deterministic step]` block with structured execution metadata and truncated stdout/stderr previews before the prompt body.
+- Deterministic stdout/stderr payloads are now capped before they are stored in message details, while preserving total line/character counts and truncation metadata for both the card UI and the LLM handoff block.
+
+### Fixed
+- Added regression coverage for deterministic loader parsing, relative script resolution, handoff gating, and the no-handoff fast path.
+- Deterministic timeouts now escalate from `SIGTERM` to `SIGKILL` if the child process does not exit within the post-timeout grace window.
+
 ## [0.7.3] - 2026-04-14
 
 ### Fixed

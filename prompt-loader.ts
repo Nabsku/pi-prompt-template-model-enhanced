@@ -41,6 +41,24 @@ export interface DelegationLineupSlot {
 	count?: number;
 }
 
+export type DeterministicHandoff = "always" | "never" | "on-success" | "on-failure";
+
+export type DeterministicExecution =
+	| { kind: "run"; command: string }
+	| { kind: "command"; command: string; args: string[]; shell: boolean }
+	| { kind: "script"; path: string; args: string[] };
+
+export type DeterministicEnv = Record<string, string>;
+
+export interface DeterministicStep {
+	execution: DeterministicExecution;
+	handoff: DeterministicHandoff;
+	nonInteractive: boolean;
+	timeoutMs?: number;
+	cwd?: string;
+	env?: DeterministicEnv;
+}
+
 export interface PromptWithModel {
 	name: string;
 	description: string;
@@ -58,6 +76,7 @@ export interface PromptWithModel {
 	converge?: boolean;
 	parallel?: number;
 	worktree?: boolean;
+	deterministic?: DeterministicStep;
 	subagent?: true | string;
 	inheritContext?: boolean;
 	cwd?: string;
@@ -346,6 +365,378 @@ function normalizeParallel(
 		),
 	);
 	return undefined;
+}
+
+function normalizeStringArrayField(
+	field: string,
+	value: unknown,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): string[] | undefined {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) {
+		diagnostics.push(
+			createDiagnostic(
+				`invalid-${field}`,
+				filePath,
+				source,
+				`Ignoring invalid ${field} value in ${filePath}: expected an array of strings.`,
+			),
+		);
+		return undefined;
+	}
+
+	const args: string[] = [];
+	for (const entry of value) {
+		if (typeof entry !== "string") {
+			diagnostics.push(
+				createDiagnostic(
+					`invalid-${field}`,
+					filePath,
+					source,
+					`Ignoring invalid ${field} value in ${filePath}: expected an array of strings.`,
+				),
+			);
+			return undefined;
+		}
+		args.push(entry);
+	}
+	return args;
+}
+
+function normalizeDeterministicHandoff(
+	value: unknown,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): DeterministicHandoff {
+	if (value === undefined) return "always";
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		if (normalized === "always" || normalized === "never" || normalized === "on-success" || normalized === "on-failure") {
+			return normalized;
+		}
+	}
+
+	diagnostics.push(
+		createDiagnostic(
+			"invalid-deterministic-handoff",
+			filePath,
+			source,
+			`Using default deterministic handoff=always for ${filePath}: expected "always", "never", "on-success", or "on-failure".`,
+		),
+	);
+	return "always";
+}
+
+function normalizeTimeoutMs(
+	value: unknown,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): number | undefined {
+	if (value === undefined) return undefined;
+	let timeoutMs: number | undefined;
+	if (typeof value === "number") timeoutMs = value;
+	if (typeof value === "string" && /^\d+$/.test(value.trim())) timeoutMs = parseInt(value.trim(), 10);
+	if (timeoutMs !== undefined && Number.isInteger(timeoutMs) && timeoutMs >= 1) return timeoutMs;
+
+	diagnostics.push(
+		createDiagnostic(
+			"invalid-deterministic-timeout",
+			filePath,
+			source,
+			`Ignoring invalid deterministic timeout in ${filePath}: expected an integer greater than or equal to 1 (milliseconds).`,
+		),
+	);
+	return undefined;
+}
+
+function normalizeDeterministicEnv(
+	value: unknown,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): DeterministicEnv | undefined {
+	if (value === undefined) return undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic-env",
+				filePath,
+				source,
+				`Ignoring invalid deterministic env in ${filePath}: expected an object with string/number/boolean values.`,
+			),
+		);
+		return undefined;
+	}
+
+	const env: DeterministicEnv = {};
+	for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+		if (!key.trim()) {
+			diagnostics.push(
+				createDiagnostic(
+					"invalid-deterministic-env",
+					filePath,
+					source,
+					`Ignoring invalid deterministic env in ${filePath}: env keys must be non-empty strings.`,
+				),
+			);
+			return undefined;
+		}
+		if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") {
+			diagnostics.push(
+				createDiagnostic(
+					"invalid-deterministic-env",
+					filePath,
+					source,
+					`Ignoring invalid deterministic env in ${filePath}: env value for ${JSON.stringify(key)} must be a string, number, or boolean.`,
+				),
+			);
+			return undefined;
+		}
+		env[key] = String(raw);
+	}
+
+	return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function normalizeDeterministicNonInteractive(
+	value: unknown,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): boolean {
+	if (value === undefined) return true;
+	if (typeof value === "boolean") return value;
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		if (normalized === "true") return true;
+		if (normalized === "false") return false;
+	}
+
+	diagnostics.push(
+		createDiagnostic(
+			"invalid-deterministic-non-interactive",
+			filePath,
+			source,
+			`Using default deterministic nonInteractive=true for ${filePath}: expected true or false.`,
+		),
+	);
+	return true;
+}
+
+function normalizeDeterministicRunValue(
+	value: unknown,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): DeterministicExecution | undefined {
+	if (typeof value === "string") {
+		const command = value.trim();
+		if (command) return { kind: "run", command };
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic-run",
+				filePath,
+				source,
+				`Ignoring invalid deterministic run value in ${filePath}: expected a non-empty string or an object with command/args.`,
+			),
+		);
+		return undefined;
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic-run",
+				filePath,
+				source,
+				`Ignoring invalid deterministic run value in ${filePath}: expected a non-empty string or an object with command/args.`,
+			),
+		);
+		return undefined;
+	}
+
+	const record = value as Record<string, unknown>;
+	const command = normalizeStringField("deterministic.run.command", record.command, filePath, source, diagnostics);
+	if (!command) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic-run",
+				filePath,
+				source,
+				`Ignoring invalid deterministic run value in ${filePath}: expected object field "command" to be a non-empty string.`,
+			),
+		);
+		return undefined;
+	}
+	const args = normalizeStringArrayField("deterministic.run.args", record.args, filePath, source, diagnostics);
+	if (!args) return undefined;
+	let shell = false;
+	if (record.shell !== undefined) {
+		if (typeof record.shell === "boolean") {
+			shell = record.shell;
+		} else {
+			diagnostics.push(
+				createDiagnostic(
+					"invalid-deterministic-run",
+					filePath,
+					source,
+					`Ignoring invalid deterministic run value in ${filePath}: object field "shell" must be true or false.`,
+				),
+			);
+			return undefined;
+		}
+	}
+	return { kind: "command", command, args, shell };
+}
+
+function normalizeDeterministicScriptValue(
+	value: unknown,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): DeterministicExecution | undefined {
+	if (typeof value === "string") {
+		const path = value.trim();
+		if (path) return { kind: "script", path, args: [] };
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic-script",
+				filePath,
+				source,
+				`Ignoring invalid deterministic script value in ${filePath}: expected a non-empty string or an object with path/args.`,
+			),
+		);
+		return undefined;
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic-script",
+				filePath,
+				source,
+				`Ignoring invalid deterministic script value in ${filePath}: expected a non-empty string or an object with path/args.`,
+			),
+		);
+		return undefined;
+	}
+
+	const record = value as Record<string, unknown>;
+	const path = normalizeStringField("deterministic.script.path", record.path, filePath, source, diagnostics);
+	if (!path) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic-script",
+				filePath,
+				source,
+				`Ignoring invalid deterministic script value in ${filePath}: expected object field "path" to be a non-empty string.`,
+			),
+		);
+		return undefined;
+	}
+	const args = normalizeStringArrayField("deterministic.script.args", record.args, filePath, source, diagnostics);
+	if (!args) return undefined;
+	return { kind: "script", path, args };
+}
+
+function normalizeDeterministic(
+	frontmatter: Record<string, unknown>,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): DeterministicStep | undefined {
+	const hasNested = Object.hasOwn(frontmatter, "deterministic");
+	const hasRun = Object.hasOwn(frontmatter, "run");
+	const hasScript = Object.hasOwn(frontmatter, "script");
+	const hasHandoff = Object.hasOwn(frontmatter, "handoff");
+	const hasTimeout = Object.hasOwn(frontmatter, "timeout");
+	const hasEnv = Object.hasOwn(frontmatter, "env");
+	const hasNonInteractive = Object.hasOwn(frontmatter, "nonInteractive");
+	if (!hasNested && !hasRun && !hasScript && !hasHandoff && !hasTimeout && !hasEnv && !hasNonInteractive) return undefined;
+
+	if (hasNested && (hasRun || hasScript || hasHandoff || hasTimeout || hasEnv || hasNonInteractive)) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic-mixed-shorthand",
+				filePath,
+				source,
+				`Ignoring top-level deterministic shorthand in ${filePath}: use either "deterministic" or top-level run/script/handoff/timeout/env/nonInteractive, not both.`,
+			),
+		);
+	}
+
+	let record: Record<string, unknown>;
+	if (hasNested) {
+		const raw = frontmatter.deterministic;
+		if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+			diagnostics.push(
+				createDiagnostic(
+					"invalid-deterministic",
+					filePath,
+					source,
+					`Ignoring invalid deterministic config in ${filePath}: frontmatter field "deterministic" must be an object.`,
+				),
+			);
+			return undefined;
+		}
+		record = raw as Record<string, unknown>;
+	} else {
+		record = {
+			run: frontmatter.run,
+			script: frontmatter.script,
+			handoff: frontmatter.handoff,
+			timeout: frontmatter.timeout,
+			env: frontmatter.env,
+			nonInteractive: frontmatter.nonInteractive,
+		};
+	}
+
+	const runValue = Object.hasOwn(record, "run") ? record.run : undefined;
+	const scriptValue = Object.hasOwn(record, "script") ? record.script : undefined;
+	if (runValue !== undefined && scriptValue !== undefined) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic",
+				filePath,
+				source,
+				`Ignoring deterministic config in ${filePath}: "run" and "script" cannot be declared together.`,
+			),
+		);
+		return undefined;
+	}
+
+	const execution = runValue !== undefined
+		? normalizeDeterministicRunValue(runValue, filePath, source, diagnostics)
+		: scriptValue !== undefined
+			? normalizeDeterministicScriptValue(scriptValue, filePath, source, diagnostics)
+			: undefined;
+	if (!execution) {
+		diagnostics.push(
+			createDiagnostic(
+				"invalid-deterministic",
+				filePath,
+				source,
+				`Ignoring deterministic config in ${filePath}: expected either "run" or "script".`,
+			),
+		);
+		return undefined;
+	}
+
+	const handoff = normalizeDeterministicHandoff(record.handoff, filePath, source, diagnostics);
+	const timeoutMs = normalizeTimeoutMs(record.timeout, filePath, source, diagnostics);
+	const cwd = normalizeCwd(record.cwd, filePath, source, diagnostics);
+	const env = normalizeDeterministicEnv(record.env, filePath, source, diagnostics);
+	const nonInteractive = normalizeDeterministicNonInteractive(record.nonInteractive, filePath, source, diagnostics);
+	return {
+		execution,
+		handoff,
+		nonInteractive,
+		...(timeoutMs !== undefined ? { timeoutMs } : {}),
+		...(cwd ? { cwd } : {}),
+		...(env ? { env } : {}),
+	};
 }
 
 function normalizeLineupSlot(
@@ -1033,6 +1424,7 @@ function loadPromptsWithModelFromDir(
 				const parallel = normalizeParallel(frontmatter.parallel, fullPath, source, diagnostics);
 				const hasBestOfN = Object.hasOwn(frontmatter, "bestOfN");
 				const bestOfN = normalizeBestOfN(frontmatter.bestOfN, fullPath, source, diagnostics);
+				let deterministic = normalizeDeterministic(frontmatter, fullPath, source, diagnostics);
 				const hasLegacyWorkers = Object.hasOwn(frontmatter, "workers");
 				const hasLegacyReviewers = Object.hasOwn(frontmatter, "reviewers");
 				const hasLegacyFinalApplier = Object.hasOwn(frontmatter, "finalApplier");
@@ -1073,6 +1465,17 @@ function loadPromptsWithModelFromDir(
 					);
 					subagent = undefined;
 				}
+				if (chain && deterministic !== undefined) {
+					diagnostics.push(
+						createDiagnostic(
+							"invalid-deterministic-chain",
+							fullPath,
+							source,
+							`Ignoring deterministic config in ${fullPath}: frontmatter field "deterministic" cannot be combined with "chain".`,
+						),
+					);
+					deterministic = undefined;
+				}
 				if (chain && (safeWorkers !== undefined || safeReviewers !== undefined || safeFinalApplier !== undefined)) {
 					diagnostics.push(
 						createDiagnostic(
@@ -1098,6 +1501,17 @@ function loadPromptsWithModelFromDir(
 					safeWorkers = undefined;
 					safeReviewers = undefined;
 					safeFinalApplier = undefined;
+				}
+				if (subagent !== undefined && deterministic !== undefined) {
+					diagnostics.push(
+						createDiagnostic(
+							"invalid-deterministic-subagent",
+							fullPath,
+							source,
+							`Ignoring deterministic config in ${fullPath}: frontmatter field "deterministic" cannot be combined with "subagent".`,
+						),
+					);
+					deterministic = undefined;
 				}
 				if (subagent === undefined && inheritContext) {
 					diagnostics.push(
@@ -1145,6 +1559,17 @@ function loadPromptsWithModelFromDir(
 					safeReviewers = undefined;
 					safeFinalApplier = undefined;
 				}
+				if (safeParallel !== undefined && deterministic !== undefined) {
+					diagnostics.push(
+						createDiagnostic(
+							"invalid-deterministic-parallel",
+							fullPath,
+							source,
+							`Ignoring deterministic config in ${fullPath}: frontmatter field "deterministic" cannot be combined with "parallel".`,
+						),
+					);
+					deterministic = undefined;
+				}
 				const hasLineup = safeWorkers !== undefined || safeReviewers !== undefined || safeFinalApplier !== undefined;
 				if (!hasBestOfN && hasLegacyCompareFields) {
 					diagnostics.push(
@@ -1169,14 +1594,18 @@ function loadPromptsWithModelFromDir(
 					continue;
 				}
 				if (!chain && subagent === undefined && !hasLineup && cwd) {
-					diagnostics.push(
-						createDiagnostic(
-							"invalid-cwd",
-							fullPath,
-							source,
-							`Ignoring cwd in ${fullPath}: frontmatter field "cwd" requires "subagent", "chain", or compare lineups ("workers"/"reviewers"/"finalApplier").`,
-						),
-					);
+					if (deterministic) {
+						deterministic = { ...deterministic, ...(deterministic.cwd ? {} : { cwd }) };
+					} else {
+						diagnostics.push(
+							createDiagnostic(
+								"invalid-cwd",
+								fullPath,
+								source,
+								`Ignoring cwd in ${fullPath}: frontmatter field "cwd" requires "subagent", "chain", or compare lineups ("workers"/"reviewers"/"finalApplier").`,
+							),
+						);
+					}
 				}
 				const hasModelField = Object.hasOwn(frontmatter, "model");
 				const parsedModels = chain ? [] : normalizeModelSpecs(frontmatter.model, fullPath, source, diagnostics);
@@ -1214,6 +1643,17 @@ function loadPromptsWithModelFromDir(
 				const fresh = normalizeFresh(frontmatter.fresh, fullPath, source, diagnostics);
 				const loop = normalizeLoop(frontmatter.loop, fullPath, source, diagnostics);
 				const converge = normalizeConverge(frontmatter.converge, fullPath, source, diagnostics);
+				if (loop !== undefined && deterministic !== undefined) {
+					diagnostics.push(
+						createDiagnostic(
+							"invalid-deterministic-loop",
+							fullPath,
+							source,
+							`Ignoring deterministic config in ${fullPath}: frontmatter field "deterministic" cannot be combined with "loop" in v1.`,
+						),
+					);
+					deterministic = undefined;
+				}
 				const worktreeInput = hasBestOfN ? bestOfN?.worktree : frontmatter.worktree;
 				const worktree = normalizeWorktree(worktreeInput, fullPath, source, diagnostics);
 				let safeWorktree: boolean | undefined;
@@ -1256,6 +1696,7 @@ function loadPromptsWithModelFromDir(
 					loop !== undefined ||
 					converge === false ||
 					safeParallel !== undefined ||
+					deterministic !== undefined ||
 					hasLineup ||
 					safeWorktree === true ||
 					subagent !== undefined ||
@@ -1282,6 +1723,7 @@ function loadPromptsWithModelFromDir(
 					converge: converge === false ? false : undefined,
 					parallel: safeParallel,
 					worktree: safeWorktree,
+					deterministic,
 					subagent,
 					inheritContext: safeInheritContext || undefined,
 					cwd: safeCwd || undefined,
@@ -1381,6 +1823,7 @@ export function buildPromptCommandDescription(prompt: PromptWithModel): string {
 	const loopLabel = prompt.loop !== undefined ? ` loop:${prompt.loop === null ? "unlimited" : prompt.loop}` : "";
 	const subagentLabel = prompt.subagent ? ` subagent:${prompt.subagent === true ? "delegate" : prompt.subagent}` : "";
 	const parallelLabel = prompt.parallel !== undefined ? ` parallel:${prompt.parallel}` : "";
+	const deterministicLabel = prompt.deterministic ? ` deterministic-step:${prompt.deterministic.handoff}` : "";
 	const workersLabel = prompt.workers ? ` workers:${effectiveLineupCount(prompt.workers)}` : "";
 	const reviewersLabel = prompt.reviewers ? ` reviewers:${effectiveLineupCount(prompt.reviewers)}` : "";
 	const finalApplierLabel = prompt.finalApplier ? " final-applier" : "";
@@ -1388,7 +1831,7 @@ export function buildPromptCommandDescription(prompt: PromptWithModel): string {
 	const inheritContextLabel = prompt.inheritContext ? " fork" : "";
 	const worktreeLabel = prompt.worktree ? " worktree" : "";
 	const details =
-		`[${modelLabel}${rotateLabel}${thinkingLabel}${skillLabel}${loopLabel}${subagentLabel}${parallelLabel}${workersLabel}${reviewersLabel}${finalApplierLabel}${cwdLabel}${inheritContextLabel}${worktreeLabel}] ${sourceLabel}`;
+		`[${modelLabel}${rotateLabel}${thinkingLabel}${skillLabel}${loopLabel}${subagentLabel}${parallelLabel}${deterministicLabel}${workersLabel}${reviewersLabel}${finalApplierLabel}${cwdLabel}${inheritContextLabel}${worktreeLabel}] ${sourceLabel}`;
 	return prompt.description ? `${prompt.description} ${details}` : details;
 }
 
