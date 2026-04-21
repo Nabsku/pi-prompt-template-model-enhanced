@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-04-21
+
+### Added
+- Added agent skill `prompt-templates` for writing, managing, and running custom prompt templates. Registered in `package.json` under `pi.skills`.
+
 ## [0.8.0] - 2026-04-21
 
 ### Added
