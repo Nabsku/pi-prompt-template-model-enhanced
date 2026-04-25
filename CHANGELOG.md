@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-25
+
+### Added
+- Added `boomerang: true` prompt frontmatter so non-chain templates, including looped templates, can run through prompt-template-model and then collapse their execution context back to the pre-run branch.
+
+### Fixed
+- Migrated extension tool schemas from `@sinclair/typebox` to `typebox` 1.x so packaged installs follow Pi's current extension runtime contract.
+
+### Changed
+- Added `typebox` as a runtime dependency for packaged installs.
+
 ## [0.8.2] - 2026-04-21
 
 ### Added

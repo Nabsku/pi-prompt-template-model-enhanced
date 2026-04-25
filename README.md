@@ -73,6 +73,7 @@ All fields are optional. Templates that don't use any extension features (no `mo
 | `rotate` | `false` | When `true` and looping, cycle through models in the `model` list instead of using fallback semantics. Thinking levels can also be comma-separated to pair with each model. |
 | `fresh` | `false` | When looping, collapse the conversation between iterations to a brief summary instead of carrying the full context forward. Saves tokens on long loops. |
 | `converge` | `true` | When looping, stop early if an iteration makes no file changes. Set `false` to always run every iteration. |
+| `boomerang` | `false` | After a non-chain prompt finishes, collapse its execution context back to the branch point with a brief summary. Works with loops, including `fresh` loop summaries. Useful for review prompts like `/double-check`. |
 | `worktree` | `false` | When `true`, parallel delegated work runs in separate git worktrees. Valid on chain templates with `parallel()` steps, on delegated prompts with `parallel: N`, and on compare templates via `bestOfN.worktree`. |
 
 ### Delegation
@@ -291,7 +292,7 @@ This repo ships one example compare prompt under `examples/`:
 - `examples/best-of-n.md` installs as `/best-of-n`, runs in the current repo, and shows mixed workers, mixed reviewers, and an optional final apply phase.
 - Smoke test: `/best-of-n smoke test`.
 
-Install them manually from this repo checkout (or from the installed package directory):
+Install it manually from this repo checkout (or from the installed package directory):
 
 ```bash
 PTM_DIR=/path/to/pi-prompt-template-model

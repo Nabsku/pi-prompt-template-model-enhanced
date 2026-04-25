@@ -74,6 +74,7 @@ export interface PromptWithModel {
 	fresh?: boolean;
 	loop?: number | null;
 	converge?: boolean;
+	boomerang?: boolean;
 	parallel?: number;
 	worktree?: boolean;
 	deterministic?: DeterministicStep;
@@ -298,6 +299,31 @@ function normalizeRotate(
 			filePath,
 			source,
 			`Using default rotate=false for ${filePath}: frontmatter field "rotate" must be true or false.`,
+		),
+	);
+	return false;
+}
+
+function normalizeBoomerang(
+	value: unknown,
+	filePath: string,
+	source: PromptSource,
+	diagnostics: PromptLoaderDiagnostic[],
+): boolean {
+	if (value === undefined) return false;
+	if (typeof value === "boolean") return value;
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		if (normalized === "true") return true;
+		if (normalized === "false") return false;
+	}
+
+	diagnostics.push(
+		createDiagnostic(
+			"invalid-boomerang",
+			filePath,
+			source,
+			`Using default boomerang=false for ${filePath}: frontmatter field "boomerang" must be true or false.`,
 		),
 	);
 	return false;
@@ -1643,6 +1669,18 @@ function loadPromptsWithModelFromDir(
 				const fresh = normalizeFresh(frontmatter.fresh, fullPath, source, diagnostics);
 				const loop = normalizeLoop(frontmatter.loop, fullPath, source, diagnostics);
 				const converge = normalizeConverge(frontmatter.converge, fullPath, source, diagnostics);
+				let boomerang = normalizeBoomerang(frontmatter.boomerang, fullPath, source, diagnostics);
+				if (chain && boomerang) {
+					diagnostics.push(
+						createDiagnostic(
+							"invalid-boomerang-chain",
+							fullPath,
+							source,
+							`Ignoring boomerang in ${fullPath}: frontmatter fields "chain" and "boomerang" cannot be combined.`,
+						),
+					);
+					boomerang = false;
+				}
 				if (loop !== undefined && deterministic !== undefined) {
 					diagnostics.push(
 						createDiagnostic(
@@ -1695,6 +1733,7 @@ function loadPromptsWithModelFromDir(
 					fresh === true ||
 					loop !== undefined ||
 					converge === false ||
+					boomerang === true ||
 					safeParallel !== undefined ||
 					deterministic !== undefined ||
 					hasLineup ||
@@ -1721,6 +1760,7 @@ function loadPromptsWithModelFromDir(
 					fresh: fresh || undefined,
 					loop: loop !== undefined ? loop : undefined,
 					converge: converge === false ? false : undefined,
+					boomerang: boomerang || undefined,
 					parallel: safeParallel,
 					worktree: safeWorktree,
 					deterministic,
@@ -1821,6 +1861,7 @@ export function buildPromptCommandDescription(prompt: PromptWithModel): string {
 	const thinkingValue = prompt.thinkingLevels ? prompt.thinkingLevels.join(",") : prompt.thinking;
 	const thinkingLabel = thinkingValue ? ` ${thinkingValue}` : "";
 	const loopLabel = prompt.loop !== undefined ? ` loop:${prompt.loop === null ? "unlimited" : prompt.loop}` : "";
+	const boomerangLabel = prompt.boomerang ? " boomerang" : "";
 	const subagentLabel = prompt.subagent ? ` subagent:${prompt.subagent === true ? "delegate" : prompt.subagent}` : "";
 	const parallelLabel = prompt.parallel !== undefined ? ` parallel:${prompt.parallel}` : "";
 	const deterministicLabel = prompt.deterministic ? ` deterministic-step:${prompt.deterministic.handoff}` : "";
@@ -1831,7 +1872,7 @@ export function buildPromptCommandDescription(prompt: PromptWithModel): string {
 	const inheritContextLabel = prompt.inheritContext ? " fork" : "";
 	const worktreeLabel = prompt.worktree ? " worktree" : "";
 	const details =
-		`[${modelLabel}${rotateLabel}${thinkingLabel}${skillLabel}${loopLabel}${subagentLabel}${parallelLabel}${deterministicLabel}${workersLabel}${reviewersLabel}${finalApplierLabel}${cwdLabel}${inheritContextLabel}${worktreeLabel}] ${sourceLabel}`;
+		`[${modelLabel}${rotateLabel}${thinkingLabel}${skillLabel}${loopLabel}${boomerangLabel}${subagentLabel}${parallelLabel}${deterministicLabel}${workersLabel}${reviewersLabel}${finalApplierLabel}${cwdLabel}${inheritContextLabel}${worktreeLabel}] ${sourceLabel}`;
 	return prompt.description ? `${prompt.description} ${details}` : details;
 }
 

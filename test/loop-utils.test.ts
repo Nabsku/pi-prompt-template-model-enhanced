@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { didIterationMakeChanges, generateChainStepSummary, generateIterationSummary, getIterationEntries } from "../loop-utils.js";
+import { didIterationMakeChanges, generateBoomerangSummary, generateChainStepSummary, generateIterationSummary, getIterationEntries } from "../loop-utils.js";
 
 const delegatedEntry = {
 	id: "delegated-1",
@@ -59,6 +59,36 @@ test("generateIterationSummary includes delegated outcomes", () => {
 	const summary = generateIterationSummary([delegatedEntry], "simplify", 1, 3);
 	assert.match(summary, /modified src\/a\.ts/);
 	assert.match(summary, /Outcome: Updated file\./);
+});
+
+test("generateBoomerangSummary labels collapsed prompt runs", () => {
+	const summary = generateBoomerangSummary([delegatedEntry], "double-check");
+	assert.match(summary, /^\[Boomerang\]/);
+	assert.match(summary, /Task: "double-check"/);
+	assert.match(summary, /Outcome: Updated file\./);
+});
+
+test("generateBoomerangSummary preserves full multiline outcomes", () => {
+	const longText = `Line one\r\n${"x".repeat(520)}\nLine three`;
+	const entries = [
+		{
+			id: "msg-long",
+			type: "message",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: longText }],
+			},
+		},
+	] as any;
+
+	const boomerangSummary = generateBoomerangSummary(entries, "double-check");
+	assert.match(boomerangSummary, /Outcome: Line one\n/);
+	assert.match(boomerangSummary, /Line three$/);
+	assert.doesNotMatch(boomerangSummary, /\.\.\.$/);
+
+	const loopSummary = generateIterationSummary(entries, "double-check", 1, 2);
+	assert.match(loopSummary, /\.\.\.$/);
+	assert.doesNotMatch(loopSummary, /Outcome: Line one\n/);
 });
 
 test("getIterationEntries falls back to full branch when start is missing", () => {

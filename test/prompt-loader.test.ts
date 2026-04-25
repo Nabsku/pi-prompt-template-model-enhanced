@@ -250,6 +250,33 @@ test("loadPromptsWithModel parses fresh frontmatter field", () => {
 	});
 });
 
+test("loadPromptsWithModel parses boomerang frontmatter field", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "double-check.md"), '---\ndescription: "review"\nboomerang: true\n---\nbody');
+
+		const result = loadPromptsWithModel(cwd);
+		const prompt = result.prompts.get("double-check");
+		assert.equal(prompt?.boomerang, true);
+		assert.equal(buildPromptCommandDescription(prompt!), "review [current boomerang] (project)");
+	});
+});
+
+test("loadPromptsWithModel rejects boomerang on chain templates", () => {
+	withTempHome((root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "chain-boomerang.md"), '---\nchain: "analyze -> fix"\nboomerang: true\n---\nignored');
+
+		const result = loadPromptsWithModel(cwd);
+		const prompt = result.prompts.get("chain-boomerang");
+		assert.ok(prompt);
+		assert.equal(prompt.boomerang, undefined);
+		assert.match(result.diagnostics.map((item) => item.message).join("\n"), /chain" and "boomerang" cannot be combined/i);
+	});
+});
+
 test("loadPromptsWithModel parses rotate frontmatter field on non-chain templates", () => {
 	withTempHome((root) => {
 		const cwd = join(root, "project");

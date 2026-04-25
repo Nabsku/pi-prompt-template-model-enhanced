@@ -1338,6 +1338,127 @@ test("chain cleanup runs even when restore throws", async () => {
 	});
 });
 
+test("boomerang frontmatter collapses a prompt-template-model command after execution", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "double-check.md"), '---\ndescription: "review"\nboomerang: true\n---\nCHECK:$@');
+
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const branching = createBranchingContext(cwd, pi, [ACTIVE_MODEL]);
+		let collapseSummary = "";
+		let navigateCount = 0;
+		branching.ctx.navigateTree = async (targetId: string) => {
+			navigateCount++;
+			const result = await pi.emitWithResult(
+				"session_before_tree",
+				{
+					preparation: {
+						targetId,
+						entriesToSummarize: branching.branch.slice(1),
+					},
+				},
+				branching.ctx,
+			);
+			collapseSummary = String((result?.summary as { summary?: string } | undefined)?.summary ?? "");
+			return { cancelled: false };
+		};
+		branching.queueAssistantText("Fixed 1 issue.");
+		await pi.emit("session_start", {}, branching.ctx);
+
+		const doubleCheck = pi.commands.get("double-check");
+		assert.ok(doubleCheck);
+		await doubleCheck.handler("src/index.ts", branching.ctx);
+
+		assert.deepEqual(pi.userMessages, ["CHECK:src/index.ts"]);
+		assert.equal(navigateCount, 1);
+		assert.match(collapseSummary, /^\[Boomerang\]/);
+		assert.match(collapseSummary, /Task: "double-check"/);
+		assert.match(collapseSummary, /Outcome: Fixed 1 issue\./);
+	});
+});
+
+test("boomerang frontmatter still collapses when the prompt is looped", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "double-check.md"), '---\nboomerang: true\n---\nCHECK:$@');
+
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const branching = createBranchingContext(cwd, pi, [ACTIVE_MODEL]);
+		let collapseSummary = "";
+		let navigateCount = 0;
+		branching.ctx.navigateTree = async (targetId: string) => {
+			navigateCount++;
+			const result = await pi.emitWithResult(
+				"session_before_tree",
+				{
+					preparation: {
+						targetId,
+						entriesToSummarize: branching.branch.slice(1),
+					},
+				},
+				branching.ctx,
+			);
+			collapseSummary = String((result?.summary as { summary?: string } | undefined)?.summary ?? "");
+			return { cancelled: false };
+		};
+		branching.queueAssistantText("First pass fixed one issue.");
+		branching.queueAssistantText("Second pass found no more issues.");
+		await pi.emit("session_start", {}, branching.ctx);
+
+		const doubleCheck = pi.commands.get("double-check");
+		assert.ok(doubleCheck);
+		await doubleCheck.handler("src/index.ts --loop 2 --no-converge", branching.ctx);
+
+		assert.deepEqual(pi.userMessages, ["[Loop 1/2]\n\nCHECK:src/index.ts", "[Loop 2/2]\n\nCHECK:src/index.ts"]);
+		assert.equal(navigateCount, 1);
+		assert.match(collapseSummary, /^\[Boomerang\]/);
+		assert.match(collapseSummary, /Outcome: Second pass found no more issues\./);
+	});
+});
+
+test("fresh loop summaries are preserved when a looped boomerang collapses", async () => {
+	await withTempHome(async (root) => {
+		const cwd = join(root, "project");
+		mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "prompts", "double-check.md"), '---\nboomerang: true\n---\nCHECK:$@');
+
+		const pi = new FakePi();
+		promptModelExtension(pi as never);
+		const branching = createBranchingContext(cwd, pi, [ACTIVE_MODEL]);
+		const collapseSummaries: string[] = [];
+		branching.ctx.navigateTree = async (targetId: string) => {
+			const result = await pi.emitWithResult(
+				"session_before_tree",
+				{
+					preparation: {
+						targetId,
+						entriesToSummarize: branching.branch.slice(1),
+					},
+				},
+				branching.ctx,
+			);
+			collapseSummaries.push(String((result?.summary as { summary?: string } | undefined)?.summary ?? ""));
+			return { cancelled: false };
+		};
+		branching.queueAssistantText("First pass fixed one issue.");
+		branching.queueAssistantText("Second pass found no more issues.");
+		await pi.emit("session_start", {}, branching.ctx);
+
+		const doubleCheck = pi.commands.get("double-check");
+		assert.ok(doubleCheck);
+		await doubleCheck.handler("src/index.ts --loop 2 --fresh --no-converge", branching.ctx);
+
+		assert.equal(collapseSummaries.length, 2);
+		assert.match(collapseSummaries[0]!, /^\[Loop iteration 1\/2\]/);
+		assert.match(collapseSummaries[1]!, /^\[Loop iteration 1\/2\]/);
+		assert.match(collapseSummaries[1]!, /---\n\n\[Boomerang\]/);
+	});
+});
+
 test("prompt without model inherits current model for conditionals and skill injection", async () => {
 	await withTempHome(async (root) => {
 		const cwd = join(root, "project");

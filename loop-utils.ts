@@ -88,7 +88,7 @@ function collectSummaryData(entries: SessionEntry[]): CollectedSummaryData {
 	};
 }
 
-function formatSummary(header: string, entries: SessionEntry[]): string {
+function formatSummary(header: string, entries: SessionEntry[], preserveOutcome = false): string {
 	const { filesRead, filesWritten, commandCount, lastAssistantText } = collectSummaryData(entries);
 
 	let summary = header;
@@ -102,9 +102,11 @@ function formatSummary(header: string, entries: SessionEntry[]): string {
 	}
 
 	if (lastAssistantText) {
-		const cleaned = lastAssistantText.replace(/\n+/g, " ").trim();
-		const truncated = cleaned.slice(0, 500);
-		summary += `\nOutcome: ${truncated}${cleaned.length > 500 ? "..." : ""}`;
+		const cleaned = preserveOutcome
+			? lastAssistantText.replace(/\r\n?/g, "\n").trim()
+			: lastAssistantText.replace(/\n+/g, " ").trim();
+		const outcome = preserveOutcome || cleaned.length <= 500 ? cleaned : `${cleaned.slice(0, 500)}...`;
+		summary += `\nOutcome: ${outcome}`;
 	}
 
 	return summary;
@@ -115,6 +117,10 @@ export function generateIterationSummary(entries: SessionEntry[], task: string, 
 		? `[Loop iteration ${iteration}/${totalIterations}]\nTask: "${task}"`
 		: `[Loop iteration ${iteration}]\nTask: "${task}"`;
 	return formatSummary(header, entries);
+}
+
+export function generateBoomerangSummary(entries: SessionEntry[], task: string): string {
+	return formatSummary(`[Boomerang]\nTask: "${task}"`, entries, true);
 }
 
 export function generateChainStepSummary(entries: SessionEntry[], stepLabel: string, stepNumber: number): string {

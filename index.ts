@@ -16,7 +16,7 @@ import {
 	type SubagentOverride,
 } from "./args.js";
 import { parseChainSteps, parseChainDeclaration, type ChainStep, type ChainStepOrParallel, type ParallelChainStep } from "./chain-parser.js";
-import { generateChainStepSummary, generateIterationSummary, didIterationMakeChanges, getIterationEntries, wasIterationAborted } from "./loop-utils.js";
+import { generateBoomerangSummary, generateChainStepSummary, generateIterationSummary, didIterationMakeChanges, getIterationEntries, wasIterationAborted } from "./loop-utils.js";
 import { selectModelCandidate } from "./model-selection.js";
 import { notify, summarizePromptDiagnostics, diagnosticsFingerprint } from "./notifications.js";
 import { preparePromptExecution, renderPromptForResolvedModel } from "./prompt-execution.js";
@@ -54,6 +54,12 @@ interface FreshCollapse {
 	task: string;
 	iteration: number;
 	totalIterations: number | null;
+}
+
+interface BoomerangCollapse {
+	targetId: string;
+	task: string;
+	previousSummaries: string[];
 }
 
 interface PendingSkillMessage {
@@ -108,6 +114,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 	let chainActive = false;
 	let loopState: LoopState | null = null;
 	let freshCollapse: FreshCollapse | null = null;
+	let boomerangCollapse: BoomerangCollapse | null = null;
 	let accumulatedSummaries: string[] = [];
 	let lastDiagnostics = "";
 	let storedCommandCtx: ExtensionCommandContext | null = null;
@@ -918,6 +925,26 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		}
 	}
 
+	async function collapseBoomerangPrompt(
+		ctx: ExtensionContext,
+		name: string,
+		targetId: string | null,
+		previousSummaries: string[] = [],
+	) {
+		if (!targetId) {
+			notify(ctx, `Cannot boomerang prompt \`${name}\`: no session entry to return to.`, "warning");
+			return;
+		}
+
+		boomerangCollapse = { targetId, task: name, previousSummaries };
+		try {
+			const result = await ctx.navigateTree(targetId, { summarize: true });
+			if (result.cancelled) notify(ctx, `Boomerang cancelled for prompt \`${name}\``, "warning");
+		} finally {
+			boomerangCollapse = null;
+		}
+	}
+
 	async function runPromptLoop(
 		name: string,
 		cleanedArgs: string,
@@ -942,10 +969,11 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		let currentThinking = savedThinking;
 		const shouldRestore = initialPrompt.restore;
 		const useFresh = freshFlag || initialPrompt.fresh === true;
+		const shouldBoomerang = initialPrompt.boomerang === true;
 		const effectiveMax = totalIterations ?? UNLIMITED_LOOP_CAP;
 		const isUnlimited = totalIterations === null;
 		const useConverge = converge && initialPrompt.converge !== false;
-		const anchorId = useFresh ? ctx.sessionManager.getLeafId() : null;
+		const anchorId = useFresh || shouldBoomerang ? ctx.sessionManager.getLeafId() : null;
 
 		loopState = { currentIteration: 1, totalIterations };
 		accumulatedSummaries = [];
@@ -955,6 +983,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		let loopErrorState: ExecutionErrorState = { hasError: false, error: undefined };
 		let lastDelegatedText: string | undefined;
 		let loopAborted = false;
+		let boomerangPreviousSummaries: string[] = [];
 
 		try {
 			for (let i = 0; i < effectiveMax; i++) {
@@ -1024,7 +1053,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 					break;
 				}
 
-				if (anchorId && i < effectiveMax - 1) {
+				if (useFresh && anchorId && i < effectiveMax - 1) {
 					freshCollapse = { targetId: anchorId, task: name, iteration: i + 1, totalIterations };
 					const result = await ctx.navigateTree(anchorId, { summarize: true });
 					freshCollapse = null;
@@ -1049,9 +1078,11 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 				"loop",
 			);
 
+			boomerangPreviousSummaries = accumulatedSummaries;
 			loopState = null;
 			pendingSkillMessage = undefined;
 			freshCollapse = null;
+			boomerangCollapse = null;
 			accumulatedSummaries = [];
 			updateLoopStatus(ctx);
 
@@ -1067,6 +1098,10 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 			pi.sendUserMessage(`[${label}]\n\n${lastDelegatedText}`);
 			await waitForTurnStart(ctx);
 			await ctx.waitForIdle();
+		}
+
+		if (!loopErrorState.hasError && !loopAborted && shouldBoomerang) {
+			await collapseBoomerangPrompt(ctx, name, anchorId, boomerangPreviousSummaries);
 		}
 
 		if (loopErrorState.hasError) {
@@ -1402,6 +1437,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 			chainActive = false;
 			loopState = null;
 			freshCollapse = null;
+			boomerangCollapse = null;
 			accumulatedSummaries = [];
 			updateLoopStatus(ctx);
 			if (ctx.hasUI) {
@@ -1549,6 +1585,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		};
 		const savedModel = getCurrentModel(ctx);
 		const savedThinking = pi.getThinkingLevel();
+		const boomerangTargetId = effectivePrompt.boomerang ? ctx.sessionManager.getLeafId() : null;
 		const stepResult = await executePromptStep(
 			effectivePrompt,
 			parseCommandArgs(argsWithoutSubagent),
@@ -1573,6 +1610,10 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 				previousThinking = savedThinking;
 			}
 		}
+
+		if (effectivePrompt.boomerang) {
+			await collapseBoomerangPrompt(ctx, name, boomerangTargetId);
+		}
 	}
 
 	function resetSessionScopedState(ctx: ExtensionContext) {
@@ -1581,6 +1622,7 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 		previousModel = undefined;
 		previousThinking = undefined;
 		runtimeModel = ctx.model;
+		boomerangCollapse = null;
 		toolManager.clearQueue();
 		refreshPrompts(ctx.cwd, ctx);
 	}
@@ -1644,6 +1686,15 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_before_tree", async (event) => {
+		if (boomerangCollapse && event.preparation.targetId === boomerangCollapse.targetId) {
+			const summary = generateBoomerangSummary(event.preparation.entriesToSummarize, boomerangCollapse.task);
+			return {
+				summary: {
+					summary: [...boomerangCollapse.previousSummaries, summary].join("\n\n---\n\n"),
+				},
+			};
+		}
+
 		if (!freshCollapse) return;
 		if (event.preparation.targetId !== freshCollapse.targetId) return;
 
