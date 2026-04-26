@@ -1349,8 +1349,10 @@ test("boomerang frontmatter collapses a prompt-template-model command after exec
 		const branching = createBranchingContext(cwd, pi, [ACTIVE_MODEL]);
 		let collapseSummary = "";
 		let navigateCount = 0;
+		let flagDuringNavigation: boolean | undefined;
 		branching.ctx.navigateTree = async (targetId: string) => {
 			navigateCount++;
+			flagDuringNavigation = (globalThis as typeof globalThis & { __boomerangCollapseInProgress?: boolean }).__boomerangCollapseInProgress;
 			const result = await pi.emitWithResult(
 				"session_before_tree",
 				{
@@ -1373,6 +1375,8 @@ test("boomerang frontmatter collapses a prompt-template-model command after exec
 
 		assert.deepEqual(pi.userMessages, ["CHECK:src/index.ts"]);
 		assert.equal(navigateCount, 1);
+		assert.equal(flagDuringNavigation, true);
+		assert.equal((globalThis as typeof globalThis & { __boomerangCollapseInProgress?: boolean }).__boomerangCollapseInProgress, false);
 		assert.match(collapseSummary, /^\[Boomerang\]/);
 		assert.match(collapseSummary, /Task: "double-check"/);
 		assert.match(collapseSummary, /Outcome: Fixed 1 issue\./);

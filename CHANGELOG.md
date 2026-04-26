@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-04-26
+
+### Fixed
+- `boomerang: true` prompt collapses now signal rewind to keep current files automatically, avoiding the restore-options prompt during collapse.
+
 ## [0.9.0] - 2026-04-25
 
 ### Added

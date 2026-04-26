@@ -938,9 +938,11 @@ export default function promptModelExtension(pi: ExtensionAPI) {
 
 		boomerangCollapse = { targetId, task: name, previousSummaries };
 		try {
+			(globalThis as typeof globalThis & { __boomerangCollapseInProgress?: boolean }).__boomerangCollapseInProgress = true;
 			const result = await ctx.navigateTree(targetId, { summarize: true });
 			if (result.cancelled) notify(ctx, `Boomerang cancelled for prompt \`${name}\``, "warning");
 		} finally {
+			(globalThis as typeof globalThis & { __boomerangCollapseInProgress?: boolean }).__boomerangCollapseInProgress = false;
 			boomerangCollapse = null;
 		}
 	}
