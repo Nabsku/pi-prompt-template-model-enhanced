@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -115,10 +114,9 @@ const delegatedLiveState = new Map<string, DelegatedSubagentLiveState>();
 function runtimeCandidates(cwd: string): string[] {
 	const fromEnv = process.env.PI_SUBAGENT_RUNTIME_ROOT?.trim();
 	if (fromEnv) return [resolve(fromEnv)];
-	const localSibling = resolve(dirname(fileURLToPath(import.meta.url)), "..", "subagent");
+	const localSibling = resolve(dirname(fileURLToPath(import.meta.url)), "..", "pi-subagents");
 	return [
-		resolve(cwd, ".pi", "agent", "extensions", "subagent"),
-		join(homedir(), ".pi", "agent", "extensions", "subagent"),
+		resolve(cwd, ".pi", "npm", "node_modules", "pi-subagents"),
 		localSibling,
 	];
 }
@@ -217,7 +215,7 @@ export async function ensureSubagentRuntime(cwd: string): Promise<SubagentRuntim
 	const root = findSubagentRoot(cwd);
 	if (!root) {
 		throw new Error(
-			"Delegated prompt execution requires the subagent extension runtime at ~/.pi/agent/extensions/subagent.",
+			"Delegated prompt execution requires pi-subagents. Install it with `pi install npm:pi-subagents` or set PI_SUBAGENT_RUNTIME_ROOT.",
 		);
 	}
 

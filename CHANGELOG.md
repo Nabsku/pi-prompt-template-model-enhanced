@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-04-28
+
+### Fixed
+- Delegated prompt templates now discover `pi-subagents` installs from project-local Pi npm paths and sibling npm package paths instead of the legacy `subagent` extension path, fixing #1. Thanks @hschne for the report.
+
 ## [0.9.2] - 2026-04-28
 
 ### Fixed

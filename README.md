@@ -795,4 +795,3 @@ $@
 - In chains, model-less steps inherit the chain-start model snapshot, not the previous step's model. This is intentional for deterministic behavior.
 - Delegated `subagent` prompts require [pi-subagents](https://github.com/nicobailon/pi-subagents/).
 - `run-prompt` must be explicitly enabled with `/prompt-tool on`.
-rompt-tool on`.
