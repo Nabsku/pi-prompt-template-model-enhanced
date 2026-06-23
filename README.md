@@ -779,9 +779,9 @@ Only the first existing file in each location is loaded, in `json`, `yaml`, then
 {
   "presets": {
     "quick": {
-      "description": "Two cheap workers, one reviewer",
+      "description": "Two cheap workers, one reviewer, optional final applier",
       "defaultModel": "openai-codex/gpt-5.4-mini:low",
-      "maxModelCalls": 3,
+      "maxModelCalls": 4,
       "workers": [{ "agent": "delegate", "count": 2 }],
       "reviewers": [{ "agent": "reviewer" }]
     }
@@ -794,9 +794,9 @@ Equivalent YAML:
 ```yaml
 presets:
   quick:
-    description: Two cheap workers, one reviewer
+    description: Two cheap workers, one reviewer, optional final applier
     defaultModel: openai-codex/gpt-5.4-mini:low
-    maxModelCalls: 3
+    maxModelCalls: 4
     workers:
       - agent: delegate
         count: 2
