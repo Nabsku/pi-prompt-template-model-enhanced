@@ -22,12 +22,12 @@ Extension `examples/` are reference files only. Copy them to a prompt directory 
 
 ```markdown
 ---
-model: claude-sonnet-4-20250514
+description: Tiny smoke prompt
 ---
-Your prompt body here.
+Reply with one sentence: hello from this Pi session.
 ```
 
-Save as `my-command.md`, restart Pi, run `/my-command`. Use `description:` for autocomplete text.
+Save as `~/.pi/agent/prompts/hello.md`, restart Pi if it is already running, then run `/validate-prompts`, `/print-prompt hello --plain`, and `/hello`. Omit `model:` to inherit the current session model; add `description:` for autocomplete text.
 
 ## Model Selection
 
@@ -155,6 +155,8 @@ Supports exact IDs, `provider/model-id` pairs, wildcards (`anthropic/*`), and co
 
 Run multiple workers, aggregate with reviewers, optionally apply final changes. Put workflow policy in the prompt and reusable lineup choices in optional presets:
 
+Preset mental model: presets choose who participates and the model-call cap; prompt templates choose what work is allowed. Put reusable lineups, models, counts, default model, and `maxModelCalls` in presets. Keep task text, `cwd`, `worktree`, `finalApplier`, `commit`, dirty/report policy, and other execution behavior in prompt templates. `maxModelCalls` counts expanded workers + reviewers + an optional final applier.
+
 ```json
 {
   "presets": {
@@ -168,13 +170,28 @@ Run multiple workers, aggregate with reviewers, optionally apply final changes. 
 }
 ```
 
+YAML preset files are also supported:
+
+```yaml
+presets:
+  quick:
+    defaultModel: openai-codex/gpt-5.4-mini:low
+    maxModelCalls: 3
+    workers:
+      - agent: delegate
+        count: 2
+    reviewers:
+      - agent: reviewer
+```
+
 Preset files live at `~/.pi/agent/best-of-n-presets.json` / `.yaml` / `.yml` and `<compare-cwd>/.pi/best-of-n-presets.json` / `.yaml` / `.yml`. Project presets override same-named user presets, but execution asks for per-session approval; `/compare-presets` and `/dry-run-prompt <compare> --preset <name>` are read-only and do not approve or run them. Use `/compare-presets --plain` for deterministic stdout. Preset slots only support `agent`/`subagent`, `model`, and `count`; keep `task`, `taskSuffix`, `cwd`, `finalApplier`, `worktree`, and dirty/report/commit policy in prompt templates. Successful compare runs write `.pi/runs/best-of-n/<timestamp>-<prompt>-<id>/report.md` plus `lineup.json`; inspect them with `/compare-runs`, `/compare-runs --plain --limit 5`, or `/compare-runs --plain --id <run-id>`. Add `--keep-artifacts` when you also need raw worker/reviewer/final-applier outputs. Use `bestOfN.commit: ask` with a `finalApplier` when you want a display-only commit approval block with changed files, diff summary, report path, suggested commit message, and safe manual `git -C <compare-cwd> add --patch` / `git -C <compare-cwd> commit -m ...` commands without auto-committing. For intended new files shown as `??`, mark them with `git -C <compare-cwd> add -N -- <path>` or explicitly stage them before committing.
 
 Common compare workflows:
 
-- Adversarial oracle review: `/compare-presets --plain`, `/dry-run-prompt best-of-n --preset quick --plain review the change`, `/best-of-n --preset quick --keep-artifacts review the change`, then `/compare-runs --plain --id <run-id>`.
-- Compare then inspect history: `/print-prompt best-of-n --preset quick --plain refactor the parser`, `/best-of-n --preset quick refactor the parser`, then `/compare-runs` for the TUI picker or `/compare-runs --plain --run <run-id>` for stdout.
-- Safe final-applier: set `bestOfN.worktree: true`, configure one `finalApplier`, set `commit: ask`, then run `/dry-run-prompt best-of-n --preset quick --plain implement the cleanup` before `/best-of-n --preset quick implement the cleanup`.
+- Evidence-retaining adversarial oracle review: `/compare-presets --plain`, `/dry-run-prompt best-of-n --preset quick --plain review the change`, `/best-of-n --preset quick --keep-artifacts review the change`, then `/compare-runs --plain --id <run-id>`.
+- Evidence-retaining compare operator happy path: `/compare-presets`, `/dry-run-prompt best-of-n --preset quick --plain <task>`, `/best-of-n --preset quick --keep-artifacts <task>`, then `/compare-runs --id <run-id>`.
+- Summary-only compare, then inspect history: `/print-prompt best-of-n --preset quick --plain refactor the parser`, `/best-of-n --preset quick refactor the parser`, then `/compare-runs` for the TUI picker or `/compare-runs --plain --id <run-id>` for stdout. Omit `--keep-artifacts` intentionally when the durable summary report and lineup are enough.
+- Summary-only safe final-applier: set `bestOfN.worktree: true`, configure one `finalApplier`, set `commit: ask`, then run `/dry-run-prompt best-of-n --preset quick --plain implement the cleanup` before `/best-of-n --preset quick implement the cleanup`. Add `--keep-artifacts` if you need raw final-applier evidence retained.
 
 ```yaml
 ---
@@ -206,4 +223,4 @@ Override frontmatter at invocation:
 - `--preset=<name>` / `--preset <name>` — select a best-of-N preset for compare prompts only
 - `--keep-artifacts` — retain raw best-of-N worker/reviewer/final-applier artifacts next to the generated report
 
-When stuck, check `README.md` and `examples/best-of-n.md` in this extension.
+When stuck, check `README.md` and the packaged examples: start with `examples/hello.md` or `examples/review.md`, then use `examples/best-of-n-smoke.md` before the advanced `examples/best-of-n.md` compare prompt.

@@ -251,6 +251,14 @@ test("extractSubagentOverride extracts --cwd and strips it from args", () => {
 		args: "task",
 		cwd: "/tmp/nfd",
 	});
+	assert.deepEqual(extractSubagentOverride("--cwd /tmp/nfd task"), {
+		args: "task",
+		cwd: "/tmp/nfd",
+	});
+	assert.deepEqual(extractSubagentOverride('--cwd "/tmp/repo with space" task'), {
+		args: "task",
+		cwd: "/tmp/repo with space",
+	});
 	assert.deepEqual(extractSubagentOverride("task --subagent=reviewer --cwd=/tmp/nfd"), {
 		args: "task",
 		override: { enabled: true, agent: "reviewer" },
@@ -273,6 +281,14 @@ test("extractSubagentOverride handles quoted, empty, and repeated --cwd flags", 
 
 test("extractSubagentOverride extracts --model and strips it from args", () => {
 	assert.deepEqual(extractSubagentOverride("--model=anthropic/claude-opus-4-6 task"), {
+		args: "task",
+		model: "anthropic/claude-opus-4-6",
+	});
+	assert.deepEqual(extractSubagentOverride("--model anthropic/claude-opus-4-6 task"), {
+		args: "task",
+		model: "anthropic/claude-opus-4-6",
+	});
+	assert.deepEqual(extractSubagentOverride('--model "anthropic/claude-opus-4-6" task'), {
 		args: "task",
 		model: "anthropic/claude-opus-4-6",
 	});
@@ -300,6 +316,10 @@ test("extractSubagentOverride extracts --preset and strips it from args", () => 
 	assert.deepEqual(extractSubagentOverride("--preset quick task"), {
 		args: "task",
 		preset: "quick",
+	});
+	assert.deepEqual(extractSubagentOverride('--preset "quick smoke" task'), {
+		args: "task",
+		preset: "quick smoke",
 	});
 	assert.deepEqual(extractSubagentOverride("task --model=openai/gpt-5.4 --preset deep"), {
 		args: "task",

@@ -15,10 +15,11 @@ export interface CompareRunCatalogItem {
 export type CompareRunHistoryTuiResult =
 	| { action: "closed" }
 	| { action: "back" }
+	| { action: "refresh" }
 	| { action: "selected"; runId: string };
 
 const PICKER_VISIBLE_ROWS = 18;
-const PANE_NAMES = ["Summary", "Lineup", "Report", "Artifacts", "Diagnostics"] as const;
+const PANE_NAMES = ["Summary", "Next steps", "Report", "Lineup", "Artifacts", "Diagnostics"] as const;
 type PaneName = typeof PANE_NAMES[number];
 
 function lineSafe(line: string, width: number): string {
@@ -40,6 +41,42 @@ function formatDate(ms: number): string {
 	return new Date(ms).toISOString();
 }
 
+function quoteSlashCommandArg(value: string): string {
+	if (!/[\s"'\\]/.test(value)) return value;
+	return JSON.stringify(value);
+}
+
+function cwdArg(result: BestOfNRunHistoryResult, commandCwd?: string): string {
+	const historyCwd = result.cwd;
+	if (!commandCwd || !historyCwd || historyCwd === commandCwd) return "";
+	return ` --cwd ${quoteSlashCommandArg(historyCwd)}`;
+}
+
+function runPlainDetailCommand(result: BestOfNRunHistoryResult, run: BestOfNRunHistoryEntry, commandCwd?: string): string {
+	return `/compare-runs --plain${cwdArg(result, commandCwd)} --id ${run.name}`;
+}
+
+function artifactExplanation(artifact: BestOfNArtifactEntry, maxBytes: number): string {
+	if (artifact.status === "not-retained") return "not retained; rerun with --keep-artifacts to keep raw worker/reviewer outputs.";
+	if (artifact.status === "missing") return "missing; expected file is gone, partially copied, or manually cleaned up.";
+	if (artifact.status === "rejected") return "rejected; safety refusal for symlink, non-regular file, or path escape.";
+	if (artifact.status === "truncated") return `truncated; preview limit is ${maxBytes} bytes, open full file at ${artifact.path}.`;
+	return `retained; full file path: ${artifact.path}.`;
+}
+
+function nextSteps(result: BestOfNRunHistoryResult, run: BestOfNRunHistoryEntry, commandCwd?: string): string {
+	const lines = [
+		`Open report: ${run.reportPath}`,
+		`Plain detail: ${runPlainDetailCommand(result, run, commandCwd)}`,
+		"Browse/refresh: /compare-runs, or press b then r in this TUI.",
+	];
+	if (run.keepArtifacts === false || run.artifacts.some((artifact) => artifact.status === "not-retained")) lines.push("Need raw worker/reviewer outputs? Rerun with --keep-artifacts.");
+	if (run.artifacts.some((artifact) => artifact.status === "missing")) lines.push("Missing artifacts usually mean partial copy or manual cleanup; rerun from the same cwd if needed.");
+	if (run.artifacts.some((artifact) => artifact.status === "rejected")) lines.push("Rejected artifacts were not read for filesystem safety; inspect manually only if trusted.");
+	if (run.artifacts.some((artifact) => artifact.status === "truncated")) lines.push("Truncated previews are bounded here; open the listed full-file paths for complete output.");
+	return lines.map((line) => `- ${sanitizeForTerminal(line)}`).join("\n");
+}
+
 export function buildCompareRunCatalog(result: BestOfNRunHistoryResult): CompareRunCatalogItem[] {
 	return result.entries.map((entry) => ({
 		id: entry.name,
@@ -52,10 +89,10 @@ export function buildCompareRunCatalog(result: BestOfNRunHistoryResult): Compare
 	}));
 }
 
-function formatArtifactSummary(artifact: BestOfNArtifactEntry): string {
+function formatArtifactSummary(artifact: BestOfNArtifactEntry, maxBytes: number): string {
 	const size = artifact.size !== undefined ? `, ${artifact.size} bytes` : "";
 	const diagnostic = artifact.diagnostic ? ` — ${sanitizeForTerminal(artifact.diagnostic)}` : "";
-	return `- ${sanitizeForTerminal(artifact.name)}: ${artifact.status.replace(/-/g, " ")}${size} (${sanitizeForTerminal(artifact.path)})${diagnostic}`;
+	return `- ${sanitizeForTerminal(artifact.name)}: ${artifact.status.replace(/-/g, " ")}${size} (${sanitizeForTerminal(artifact.path)}) — ${artifactExplanation(artifact, maxBytes)}${diagnostic}`;
 }
 
 export interface CompareRunDetailViewModel {
@@ -65,16 +102,19 @@ export interface CompareRunDetailViewModel {
 		summary: string;
 		lineup: string;
 		report: string;
+		nextSteps: string;
 		artifacts: string;
 		diagnostics: string;
 	};
 }
 
-export function createCompareRunDetailViewModel(result: BestOfNRunHistoryResult, run: BestOfNRunHistoryEntry): CompareRunDetailViewModel {
+export function createCompareRunDetailViewModel(result: BestOfNRunHistoryResult, run: BestOfNRunHistoryEntry, options: { commandCwd?: string } = {}): CompareRunDetailViewModel {
 	const summary = [
 		`Run: ${sanitizeForTerminal(run.name)}`,
 		`Path: ${sanitizeForTerminal(run.path)}`,
 		`Modified: ${formatDate(run.mtimeMs)}`,
+		`Report: ${sanitizeForTerminal(run.reportPath)}`,
+		`Preview limit: ${result.maxBytes} bytes`,
 		`Status: ${formatMaybe(run.status)}`,
 		`Prompt: ${formatMaybe(run.prompt)}`,
 		`Preset: ${formatMaybe(run.preset)}`,
@@ -92,7 +132,7 @@ export function createCompareRunDetailViewModel(result: BestOfNRunHistoryResult,
 		: "report.md is unavailable. See diagnostics.";
 	const artifacts = run.artifacts.length
 		? run.artifacts.flatMap((artifact) => [
-			formatArtifactSummary(artifact),
+			formatArtifactSummary(artifact, result.maxBytes),
 			...(artifact.previewText ? [sanitizeForTerminal(artifact.previewText, { preserveLineBreaks: true })] : []),
 		]).join("\n")
 		: "No artifacts discovered.";
@@ -105,6 +145,7 @@ export function createCompareRunDetailViewModel(result: BestOfNRunHistoryResult,
 		run,
 		panes: {
 			summary,
+			nextSteps: nextSteps(result, run, options.commandCwd),
 			lineup,
 			report,
 			artifacts,
@@ -157,24 +198,28 @@ export class CompareRunPicker implements Component {
 				const item = items[index]!;
 				const marker = index === this.selectedIndex ? ">" : " ";
 				const diagnostics = item.diagnosticCount ? ` · ⚠ ${item.diagnosticCount}` : "";
-				lines.push(`${marker} ${item.name}  ${formatMaybe(item.status)} · ${formatMaybe(item.prompt)} · ${formatMaybe(item.preset)}${diagnostics}`);
+				lines.push(`${marker} ${item.name}  ${formatDate(item.mtimeMs)} · ${formatMaybe(item.status)} · ${formatMaybe(item.prompt)} · ${formatMaybe(item.preset)}${diagnostics}`);
 			}
 			const remaining = items.length - windowEnd;
 			if (remaining > 0) lines.push(`… ${remaining} later run${remaining === 1 ? "" : "s"}`);
 		}
-		lines.push("", "Enter: inspect  ↑/↓: move  Backspace: edit  Esc/q: quit");
+		lines.push("", "Enter: inspect  ↑/↓: move  Backspace: edit  r: refresh  Esc/q: quit");
 		return linesSafe(lines, width);
 	}
 
 	handleInput(data: string): void {
 		const items = this.filteredCatalog();
-		if (matchesKey(data, "q") || matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
+		if ((this.search.length === 0 && matchesKey(data, "q")) || matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
 			this.done?.({ action: "closed" });
 			return;
 		}
 		if (matchesKey(data, Key.enter) || data === "\n") {
 			const item = items[this.selectedIndex];
 			if (item) this.done?.({ action: "selected", runId: item.id });
+			return;
+		}
+		if (this.search.length === 0 && matchesKey(data, "r")) {
+			this.done?.({ action: "refresh" });
 			return;
 		}
 		if (matchesKey(data, Key.backspace)) {
@@ -197,7 +242,7 @@ export class CompareRunPicker implements Component {
 }
 
 export class CompareRunDetailInspector implements Component {
-	private paneIndex = 0;
+	private paneIndex = 2;
 	private scroll = 0;
 
 	constructor(
@@ -212,7 +257,9 @@ export class CompareRunDetailInspector implements Component {
 	}
 
 	private paneText(): string {
-		const key = this.activePane().toLowerCase() as keyof CompareRunDetailViewModel["panes"];
+		const key = this.activePane() === "Next steps"
+			? "nextSteps"
+			: this.activePane().toLowerCase() as keyof CompareRunDetailViewModel["panes"];
 		return this.viewModel.panes[key];
 	}
 
@@ -227,7 +274,7 @@ export class CompareRunDetailInspector implements Component {
 			"",
 			...body,
 			"",
-			`pane ${this.paneIndex + 1}/${PANE_NAMES.length} · line ${Math.min(this.scroll + 1, paneLines.length)}/${paneLines.length} · j/down scroll · tab next · b back · q quit`,
+			`pane ${this.paneIndex + 1}/${PANE_NAMES.length} · line ${Math.min(this.scroll + 1, paneLines.length)}/${paneLines.length} · j/down scroll · tab next · b back · r refresh · q quit`,
 		];
 		return linesSafe(lines, width);
 	}
@@ -240,6 +287,10 @@ export class CompareRunDetailInspector implements Component {
 		}
 		if (data === "b" || printable === "b") {
 			this.done?.({ action: "back" });
+			return;
+		}
+		if (data === "r" || printable === "r") {
+			this.done?.({ action: "refresh" });
 			return;
 		}
 		if (matchesKey(data, Key.tab)) {

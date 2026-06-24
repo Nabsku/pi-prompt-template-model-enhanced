@@ -73,6 +73,8 @@ This package is an enhanced fork of [`pi-prompt-template-model`](https://github.
 pi install npm:pi-prompt-workflows
 ```
 
+Existing installs: run the same install command again to fetch the published package version you want. If your Pi build has a separate update verb, use that; this extension does not currently rely on a package-specific update command.
+
 If you previously installed the package under its old name, remove it before installing the renamed package to avoid duplicate commands and tool conflicts:
 
 ```bash
@@ -82,6 +84,17 @@ pi install npm:pi-prompt-workflows
 
 Restart pi to load the extension.
 
+### Command map
+
+| Command | Use it for |
+| --- | --- |
+| `/validate-prompts` | Reload and validate prompt templates, includes, skills, and compare presets before running anything expensive. |
+| `/print-prompt <name> --plain ...` | Print the exact rendered prompt/preflight report without executing it. |
+| `/dry-run-prompt <name> --plain ...` | Same read-only preview path, with compare-specific verdict and execute guidance. |
+| `/compare-presets` | List available best-of-N presets, trust/source labels, lineups, and copyable use commands. |
+| `/compare-runs` | Browse recent compare run reports in the TUI. |
+| `/compare-runs --plain --id <run-id>` | Print one compare run report deterministically for logs/scripts. |
+
 For delegated subagent execution (`subagent` and `inheritContext` frontmatter), install [pi-subagents](https://github.com/nicobailon/pi-subagents/) separately:
 
 ```bash
@@ -89,6 +102,53 @@ pi install npm:pi-subagents
 ```
 
 pi-subagents is optional — everything else works without it. Using `subagent: true` without it installed fails fast with a clear error.
+
+## First successful use in 2 minutes
+
+Start with a skill-free prompt that inherits the current session model. This proves install, prompt loading, validation, preview, and execution before you try compare workflows.
+
+```bash
+pi install npm:pi-prompt-workflows
+mkdir -p ~/.pi/agent/prompts
+cat > ~/.pi/agent/prompts/hello.md <<'EOF'
+---
+description: Tiny smoke prompt for pi-prompt-workflows
+---
+Reply with one sentence: hello from this Pi session.
+EOF
+```
+
+Restart `pi` if it is already running. Prompt files are loaded on session start and when an extension-owned command runs, but a restart/reload is the least surprising first-run path after installing the extension or adding a brand-new command file.
+
+Then run the cheap preflight path first:
+
+```text
+/validate-prompts
+/print-prompt hello --plain
+/hello
+```
+
+If that works, you can stop there: the inline `hello.md` is the first-run path and does not require packaged examples.
+
+Packaged examples are optional starter prompts. Copy them only when you want a larger template to customize, then preview before execution. Use either a repo checkout you already have, or unpack the published npm tarball into a temporary directory; do not rely on an undocumented Pi package-install location:
+
+```bash
+# Option A: from a local checkout of this repository
+REPO=/path/to/your/pi-prompt-workflows-checkout
+cp "$REPO/examples/review.md" ~/.pi/agent/prompts/review.md
+
+# Option B: from the published npm package tarball
+TMPDIR=$(mktemp -d)
+npm pack pi-prompt-workflows --pack-destination "$TMPDIR"
+tar -xzf "$TMPDIR"/pi-prompt-workflows-*.tgz -C "$TMPDIR"
+cp "$TMPDIR/package/examples/review.md" ~/.pi/agent/prompts/review.md
+```
+
+```text
+/validate-prompts
+/print-prompt review --plain src/server.ts
+/review src/server.ts
+```
 
 ## Quick Start
 
@@ -226,7 +286,7 @@ All fields are optional. Templates that don't use any extension features (no `mo
 | `inheritContext` | `false` | Only meaningful with `subagent`. When `true`, the subagent receives a fork of the current conversation context instead of starting fresh. |
 | `parallel` | — | Delegated prompts only. Repeats the same subagent in parallel `N` times. Each copy gets a slot header like `[Parallel subagent 2/3]` prepended to the task. Must be an integer greater than or equal to 2. |
 | `bestOfN` | — | Compare templates only. Nested compare authoring block with `workers`, `reviewers`, optional `preset`, optional `finalApplier`, optional `worktree`, and optional `commit: ask`. Top-level compare fields are not supported in templates. |
-| `bestOfN.preset` | — | Name of a best-of-N preset from `~/.pi/agent/best-of-n-presets.json` or `<compare-cwd>/.pi/best-of-n-presets.json`. Presets can supply worker/reviewer agents, models, counts, `defaultModel`, and `maxModelCalls`; prompt templates still own task text, `cwd`, final apply, dirty/report/commit policy, and other execution policy. |
+| `bestOfN.preset` | — | Name of a best-of-N preset from `~/.pi/agent/best-of-n-presets.json` or `<compare-cwd>/.pi/best-of-n-presets.json`. Presets can supply worker/reviewer agents, models, counts, `defaultModel`, and `maxModelCalls`; prompt templates still own task text, `cwd`, final apply, dirty/report/commit policy, and other execution policy. `maxModelCalls` caps expanded workers + reviewers + an optional final applier. |
 | `bestOfN.workers` | — | Ordered worker lineup used for the worker phase. Each slot object supports optional `agent`/`subagent`, optional `model`, optional `task`, optional `taskSuffix`, optional `cwd`, and optional `count`. If both `agent` and `subagent` are omitted, the default agent is `delegate`. |
 | `bestOfN.reviewers` | — | Ordered reviewer lineup used after worker aggregation. Slot shape matches workers. If both `agent` and `subagent` are omitted, the default agent is `reviewer`. |
 | `bestOfN.finalApplier` | — | Optional single-slot final apply phase that edits the real branch after reviewers. Supports optional `agent`/`subagent`, optional `model`, optional `task`, and optional `taskSuffix`. If both `agent` and `subagent` are omitted, the default agent is `delegate`. `count` and `cwd` are not supported. Requires `bestOfN.worktree: true` at runtime. |
@@ -638,22 +698,60 @@ Prompt-template frontmatter authoring uses `bestOfN:`. Runtime overrides stay on
 
 Each worker/reviewer JSON array entry must be an object with either `subagent` or `agent`, plus optional `model`, `task`, `taskSuffix`, `cwd`, and `count`. In worker slots, `"subagent": true` maps to `delegate`. In reviewer slots, `"subagent": true` maps to `reviewer`. `--final-applier=` accepts one slot object (or a one-element array) with `subagent`/`agent`, optional `model`, optional `task`, and optional `taskSuffix`; for this final slot, `"subagent": true` maps to `delegate`, and both `count` and `cwd` are not supported.
 
-## Best-of-N Compare Prompt
+## Packaged prompt examples
 
-This repo ships one example compare prompt under `examples/`:
+This repo ships copyable starter prompts under `examples/`. Start with the minimal current-model prompts before trying the advanced compare workflow:
 
-- `examples/best-of-n.md` installs as `/best-of-n`, runs in the current repo, and shows mixed workers, mixed reviewers, and an optional final apply phase.
-- Smoke test: `/best-of-n smoke test`.
+- `examples/hello.md` installs as `/hello` and uses the current session model with no skills.
+- `examples/review.md` installs as `/review` and gives a simple skill-free review checklist.
+- `examples/best-of-n-smoke.md` installs as `/best-of-n-smoke` and runs one worker plus one reviewer with no final applier, no apply step, and no commit handoff.
+- `examples/best-of-n.md` installs as `/best-of-n`, runs in the current repo, and shows mixed workers, mixed reviewers, worktrees, and an optional final apply phase.
 
-Install it manually from this repo checkout (or from the installed package directory):
+Installing these examples is optional. The first-run `hello.md` above works without copying packaged examples; copy these only when you want starter templates to edit.
+
+Use a repo checkout when you have one:
 
 ```bash
-PTM_DIR=/path/to/pi-prompt-workflows
+REPO=/path/to/your/pi-prompt-workflows-checkout
 mkdir -p ~/.pi/agent/prompts
-cp "$PTM_DIR/examples/best-of-n.md" ~/.pi/agent/prompts/best-of-n.md
+cp "$REPO/examples/hello.md" ~/.pi/agent/prompts/hello.md
+cp "$REPO/examples/review.md" ~/.pi/agent/prompts/review.md
+cp "$REPO/examples/best-of-n-smoke.md" ~/.pi/agent/prompts/best-of-n-smoke.md
+cp "$REPO/examples/best-of-n.md" ~/.pi/agent/prompts/best-of-n.md
 ```
 
-After copying the file, restart `pi` if it is already running. The prompt then runs an explicit compare flow:
+Or copy from the published npm tarball without guessing where Pi installed the package:
+
+```bash
+TMPDIR=$(mktemp -d)
+npm pack pi-prompt-workflows --pack-destination "$TMPDIR"
+tar -xzf "$TMPDIR"/pi-prompt-workflows-*.tgz -C "$TMPDIR"
+mkdir -p ~/.pi/agent/prompts
+cp "$TMPDIR/package/examples/hello.md" ~/.pi/agent/prompts/hello.md
+cp "$TMPDIR/package/examples/review.md" ~/.pi/agent/prompts/review.md
+cp "$TMPDIR/package/examples/best-of-n-smoke.md" ~/.pi/agent/prompts/best-of-n-smoke.md
+cp "$TMPDIR/package/examples/best-of-n.md" ~/.pi/agent/prompts/best-of-n.md
+```
+
+After copying files, restart `pi` if it is already running. Check minimal prompts with a read-only preview before executing them:
+
+```text
+/dry-run-prompt hello --plain
+/hello
+/dry-run-prompt review --plain src/server.ts
+```
+
+For compare prompts, use preflight first instead of starting with an expensive live run:
+
+```text
+/dry-run-prompt best-of-n-smoke --plain summarize this repository's test setup
+/best-of-n-smoke summarize this repository's test setup
+/dry-run-prompt best-of-n --preset quick --plain refactor the parser
+```
+
+## Best-of-N Compare Prompt
+
+The advanced `examples/best-of-n.md` prompt runs an explicit compare flow:
 
 Compare prompt templates are authored under `bestOfN:`. Top-level `workers`, `reviewers`, and `finalApplier` frontmatter fields are rejected with migration diagnostics.
 
@@ -670,6 +768,8 @@ Worker/reviewer lineups are fully configurable from `bestOfN` frontmatter, prese
 
 Presets keep expensive lineup choices reusable without letting project config own prompt policy. Define them in either place:
 
+> Preset mental model: presets choose who participates and how many model calls are allowed; prompt templates choose what work is allowed. Keep task text, cwd, worktree/final-applier/commit policy, dirty handling, and report behavior in the prompt. Put only reusable lineups, models, counts, default model, and call caps in presets.
+
 - User presets: `~/.pi/agent/best-of-n-presets.json`, `.yaml`, or `.yml`
 - Project presets: `<compare-cwd>/.pi/best-of-n-presets.json`, `.yaml`, or `.yml`
 
@@ -679,14 +779,29 @@ Only the first existing file in each location is loaded, in `json`, `yaml`, then
 {
   "presets": {
     "quick": {
-      "description": "Two cheap workers, one reviewer",
+      "description": "Two cheap workers, one reviewer, optional final applier",
       "defaultModel": "openai-codex/gpt-5.4-mini:low",
-      "maxModelCalls": 3,
+      "maxModelCalls": 4,
       "workers": [{ "agent": "delegate", "count": 2 }],
       "reviewers": [{ "agent": "reviewer" }]
     }
   }
 }
+```
+
+Equivalent YAML:
+
+```yaml
+presets:
+  quick:
+    description: Two cheap workers, one reviewer, optional final applier
+    defaultModel: openai-codex/gpt-5.4-mini:low
+    maxModelCalls: 4
+    workers:
+      - agent: delegate
+        count: 2
+    reviewers:
+      - agent: reviewer
 ```
 
 Use from a prompt:
@@ -701,6 +816,8 @@ Or at runtime:
 ```bash
 /best-of-n --preset quick refactor the parser
 ```
+
+That minimal runtime form is summary-only: it keeps the durable `report.md` and `lineup.json`, but not raw worker/reviewer/final-applier Markdown artifacts. Add `--keep-artifacts` when you expect to audit raw outputs, hand evidence to another reviewer, or debug reviewer disagreements.
 
 List available presets without approving or running them:
 
@@ -724,7 +841,7 @@ Dry-run and preset listing are read-only: they do not approve project presets, s
 
 Use these as copyable starting points for the full compare workflow.
 
-**Adversarial oracle review:** run a read-only tournament and retain enough evidence to inspect afterwards.
+**Evidence-retaining adversarial oracle review:** run a read-only tournament and retain raw worker/reviewer artifacts for later inspection.
 
 ```text
 /compare-presets --plain
@@ -734,14 +851,23 @@ Use these as copyable starting points for the full compare workflow.
 /compare-runs --plain --id <run-id>
 ```
 
-**Compare, then inspect history:** preflight the effective lineup, execute the compare, then browse run history in Pi TUI mode or print one run deterministically.
+**Evidence-retaining operator happy path:** discover presets, preflight the exact lineup, run with retained artifacts, then inspect the run id printed at completion.
+
+```text
+/compare-presets
+/dry-run-prompt best-of-n --preset quick --plain <task>
+/best-of-n --preset quick --keep-artifacts <task>
+/compare-runs --id <run-id>
+```
+
+**Summary-only compare, then inspect history:** preflight the effective lineup, execute the compare, then browse run history in Pi TUI mode or print one run deterministically. Omit `--keep-artifacts` intentionally when the durable summary report and lineup are enough, or when you want less disk usage/noise from exploratory or low-stakes runs.
 
 ```text
 /compare-presets
 /print-prompt best-of-n --preset quick --plain refactor the parser
 /best-of-n --preset quick refactor the parser
 /compare-runs
-/compare-runs --plain --run <run-id>
+/compare-runs --plain --id <run-id>
 ```
 
 In Pi TUI mode, `/compare-runs` opens a read-only picker/detail inspector. `--plain` forces stdout output for scripts and logs.
@@ -766,7 +892,18 @@ bestOfN:
 
 After the final applier finishes, review the reported diff and run only the suggested `git -C <compare-cwd> add --patch` / `git -C <compare-cwd> commit -m ...` commands you actually approve. For intended new files shown as `??`, use `git -C <compare-cwd> add -N -- <path>` before patch-staging.
 
-Preset slot fields are intentionally limited to `agent`/`subagent`, `model`, and `count`. Presets cannot set `task`, `taskSuffix`, `cwd`, `finalApplier`, `worktree`, dirty/report/commit behavior, or other execution policy. Invalid selected presets fail closed instead of falling back to same-named user presets, and `maxModelCalls` caps the expanded worker + reviewer calls before any subagents start.
+Preset slot fields are intentionally limited to `agent`/`subagent`, `model`, and `count`. Presets cannot set `task`, `taskSuffix`, `cwd`, `finalApplier`, `worktree`, dirty/report/commit behavior, or other execution policy. Invalid selected presets fail closed instead of falling back to same-named user presets, and `maxModelCalls` caps the expanded worker + reviewer calls + optional final applier before any subagents start.
+
+### Compare troubleshooting
+
+- Missing run id: use `/compare-runs` to browse recent runs from the same cwd, then copy the explicit `Run id`. If `/compare-runs --id <run-id>` cannot find it, the diagnostic prints the searched root/cwd; rerun the compare prompt from that same cwd or inspect the listed `.pi/runs/best-of-n/` root.
+- Artifacts `not retained`: the run completed without raw worker/reviewer/final-applier files. Rerun with `--keep-artifacts` when you need raw outputs; the report and `lineup.json` are still the durable default.
+- Artifacts `missing`: an expected artifact path from `lineup.json` no longer exists. Common causes are manual cleanup, partial copy, or moving a run directory without its files. Rerun with `--keep-artifacts` if the raw output matters.
+- Artifacts `rejected`: the history reader refused to read a path because it was unsafe for display, such as a symlink, non-regular file, or path escape outside the run directory. Treat this as a safety stop and inspect the filesystem manually before trusting the artifact.
+- Artifacts `truncated`: the preview hit the display limit. The detail view shows the preview limit and full file path so you can open the raw artifact locally if you retained it.
+- Malformed `lineup.json`: `/compare-runs` still shows the report when possible, but lineup/artifact inventory may be unavailable. Rerun the compare if you need trustworthy slot metadata.
+- Wrong cwd: project presets and run history are resolved from the effective compare cwd. If a preset or run is missing, re-run `/compare-presets --plain`, `/dry-run-prompt ... --plain`, or `/compare-runs` from the repo/cwd that originally launched the compare.
+- Failed before history: very early failures may happen before a run directory/report can be written. In that case there may be no run id to recover; fix the shown validation/preset/cwd error and rerun. Later terminal compare failures should print any available run id, report path, and inspect commands.
 
 For same-model best-of-N, use `count: N` on one worker slot:
 

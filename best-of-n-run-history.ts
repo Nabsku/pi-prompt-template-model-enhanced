@@ -1,11 +1,15 @@
 import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
+import { parseCommandArgs } from "./args.js";
 
 export interface BestOfNRunHistoryOptions {
 	limit?: number;
 	maxBytes?: number;
 	plain?: boolean;
 	runId?: string;
+	tui?: boolean;
+	cwd?: string;
+	errors?: string[];
 }
 
 export interface BestOfNArtifactEntry {
@@ -38,7 +42,9 @@ export interface BestOfNRunHistoryEntry {
 }
 
 export interface BestOfNRunHistoryResult {
+	cwd?: string;
 	root: string;
+	maxBytes: number;
 	entries: BestOfNRunHistoryEntry[];
 	diagnostics: string[];
 }
@@ -280,33 +286,33 @@ function collectRun(runDir: string, maxBytes: number): BestOfNRunHistoryEntry {
 export function collectBestOfNRunHistory(cwd: string, options: BestOfNRunHistoryOptions = {}): BestOfNRunHistoryResult {
 	const rootCheck = validateRunRoot(cwd);
 	const root = rootCheck.root;
-	if (!rootCheck.ok) return { root, entries: [], diagnostics: rootCheck.diagnostic ? [rootCheck.diagnostic] : [] };
-	const diagnostics: string[] = [];
 	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+	if (!rootCheck.ok) return { cwd, root, maxBytes, entries: [], diagnostics: rootCheck.diagnostic ? [rootCheck.diagnostic] : [] };
+	const diagnostics: string[] = [];
 	let rootStat;
 	try {
 		rootStat = lstatSync(root);
 	} catch (error) {
-		return { root, entries: [], diagnostics: [`Could not inspect run root: ${error instanceof Error ? error.message : String(error)}.`] };
+		return { cwd, root, maxBytes, entries: [], diagnostics: [`Could not inspect run root: ${error instanceof Error ? error.message : String(error)}.`] };
 	}
-	if (rootStat.isSymbolicLink()) return { root, entries: [], diagnostics: ["Run root is a symlink; refusing to read compare run history."] };
-	if (!rootStat.isDirectory()) return { root, entries: [], diagnostics: ["Run root exists but is not a directory."] };
+	if (rootStat.isSymbolicLink()) return { cwd, root, maxBytes, entries: [], diagnostics: ["Run root is a symlink; refusing to read compare run history."] };
+	if (!rootStat.isDirectory()) return { cwd, root, maxBytes, entries: [], diagnostics: ["Run root exists but is not a directory."] };
 
 	if (options.runId) {
 		if (!isSafeRunId(options.runId)) {
-			return { root, entries: [], diagnostics: [`Invalid compare run id ${JSON.stringify(options.runId)}: expected a run directory name, not a path.`] };
+			return { cwd, root, maxBytes, entries: [], diagnostics: [`Invalid compare run id ${JSON.stringify(options.runId)}: expected a run directory name, not a path.`] };
 		}
 		const selectedPath = resolve(root, options.runId);
 		if (!isInside(root, selectedPath)) {
-			return { root, entries: [], diagnostics: [`Invalid compare run id ${JSON.stringify(options.runId)}: path escapes run root.`] };
+			return { cwd, root, maxBytes, entries: [], diagnostics: [`Invalid compare run id ${JSON.stringify(options.runId)}: path escapes run root.`] };
 		}
 		try {
 			const selectedStat = lstatSync(selectedPath);
-			if (selectedStat.isSymbolicLink()) return { root, entries: [], diagnostics: [`Compare run ${options.runId} is a symlink; refusing to read it.`] };
-			if (!selectedStat.isDirectory()) return { root, entries: [], diagnostics: [`Compare run ${options.runId} exists but is not a directory.`] };
-			return { root, entries: [collectRun(selectedPath, maxBytes)], diagnostics };
+			if (selectedStat.isSymbolicLink()) return { cwd, root, maxBytes, entries: [], diagnostics: [`Compare run ${options.runId} is a symlink; refusing to read it.`] };
+			if (!selectedStat.isDirectory()) return { cwd, root, maxBytes, entries: [], diagnostics: [`Compare run ${options.runId} exists but is not a directory.`] };
+			return { cwd, root, maxBytes, entries: [collectRun(selectedPath, maxBytes)], diagnostics };
 		} catch {
-			return { root, entries: [], diagnostics };
+			return { cwd, root, maxBytes, entries: [], diagnostics };
 		}
 	}
 
@@ -315,7 +321,7 @@ export function collectBestOfNRunHistory(cwd: string, options: BestOfNRunHistory
 	try {
 		rootEntries = readdirSync(root, { withFileTypes: true });
 	} catch (error) {
-		return { root, entries: [], diagnostics: [`Could not list run root: ${error instanceof Error ? error.message : String(error)}.`] };
+		return { cwd, root, maxBytes, entries: [], diagnostics: [`Could not list run root: ${error instanceof Error ? error.message : String(error)}.`] };
 	}
 	for (const entry of rootEntries) {
 		const candidate = join(root, entry.name);
@@ -341,31 +347,72 @@ export function collectBestOfNRunHistory(cwd: string, options: BestOfNRunHistory
 
 	runDirs.sort((a, b) => b.mtimeMs - a.mtimeMs || b.name.localeCompare(a.name));
 	const entries = runDirs.slice(0, clampLimit(options.limit)).map((run) => collectRun(run.path, maxBytes));
-	return { root, entries, diagnostics };
+	return { cwd, root, maxBytes, entries, diagnostics };
 }
 
 export function parseBestOfNRunHistoryArgs(args: string): BestOfNRunHistoryOptions {
-	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	const tokens = parseCommandArgs(args);
 	let limit: number | undefined;
 	let plain = false;
 	let runId: string | undefined;
+	let tui = false;
+	let cwd: string | undefined;
+	const errors: string[] = [];
 	for (let index = 0; index < tokens.length; index += 1) {
 		const token = tokens[index];
 		if (token === "--plain") {
 			plain = true;
+		} else if (token === "--tui") {
+			tui = true;
 		} else if ((token === "--run" || token === "--id") && tokens[index + 1]) {
-			runId = tokens[index + 1];
-			index += 1;
+			const value = tokens[index + 1]!;
+			if (value.startsWith("--")) errors.push(`Missing value for ${token}.`);
+			else {
+				runId = value;
+				index += 1;
+			}
+		} else if (token === "--run" || token === "--id") {
+			errors.push(`Missing value for ${token}.`);
+		} else if (token === "--run=" || token === "--id=") {
+			errors.push(`Missing value for ${token.slice(0, token.indexOf("="))}.`);
 		} else if (token.startsWith("--run=")) {
 			runId = token.slice("--run=".length);
 		} else if (token.startsWith("--id=")) {
 			runId = token.slice("--id=".length);
+		} else if (token === "--cwd" && tokens[index + 1]) {
+			const value = tokens[index + 1]!;
+			if (value.startsWith("--")) errors.push("Missing value for --cwd.");
+			else {
+				cwd = value;
+				index += 1;
+			}
+		} else if (token === "--cwd") {
+			errors.push("Missing value for --cwd.");
+		} else if (token === "--cwd=") {
+			errors.push("Missing value for --cwd.");
+		} else if (token.startsWith("--cwd=")) {
+			cwd = token.slice("--cwd=".length);
 		} else if (token === "--limit" && tokens[index + 1]) {
-			limit = Number.parseInt(tokens[index + 1]!, 10);
-			index += 1;
+			const value = tokens[index + 1]!;
+			if (value.startsWith("--")) errors.push("Missing value for --limit.");
+			else {
+				limit = Number.parseInt(value, 10);
+				if (!/^\d+$/.test(value) || !Number.isFinite(limit) || limit < 1) errors.push(`Invalid --limit ${JSON.stringify(value)}: expected a positive integer.`);
+				index += 1;
+			}
+		} else if (token === "--limit") {
+			errors.push("Missing value for --limit.");
+		} else if (token === "--limit=") {
+			errors.push("Missing value for --limit.");
 		} else if (token.startsWith("--limit=")) {
-			limit = Number.parseInt(token.slice("--limit=".length), 10);
+			const value = token.slice("--limit=".length);
+			limit = Number.parseInt(value, 10);
+			if (!/^\d+$/.test(value) || !Number.isFinite(limit) || limit < 1) errors.push(`Invalid --limit ${JSON.stringify(value)}: expected a positive integer.`);
+		} else if (token.startsWith("--")) {
+			errors.push(`Unknown /compare-runs option ${JSON.stringify(token)}.`);
+		} else {
+			errors.push(`Unexpected /compare-runs argument ${JSON.stringify(token)}.`);
 		}
 	}
-	return { limit, plain, runId };
+	return { limit, plain, runId, tui, cwd, errors };
 }
